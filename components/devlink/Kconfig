@@ -26,6 +26,24 @@ menu "devlink"
         default 8
         range 2 20
 
+    config DEVLINK_BUTTON_GPIO
+        int "Button GPIO (app: hold 3 s -> config AP, 10 s -> recovery; -1 = none)"
+        default 0
+        range -1 48
+        help
+            SPEC 5.9. Default GPIO0 (BOOT). Runtime only: GPIO0 low at reset enters ROM download mode.
+
+    config DEVLINK_SELFTEST_S
+        int "App self-test time limit (s) before a new app is rolled back"
+        default 60
+        range 10 85
+        help
+            Must be shorter than the 90 s RTC WDT verify window (SPEC 3.5).
+
+    config DEVLINK_TEST_NO_HTTP
+        bool "TEST BUILDS: never start the HTTP API (acceptance test 7)"
+        default n
+
     config DEVLINK_TEST_CONSOLE
         bool "TEST BUILDS: extra console commands for the HIL tests (fault injection)"
         default n

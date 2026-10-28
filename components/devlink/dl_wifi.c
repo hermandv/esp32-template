@@ -398,6 +398,11 @@ esp_err_t dl_wifi_scan(dl_wifi_ap_rec_t *out, size_t max, size_t *n)
     return ESP_OK;
 }
 
+void dl_wifi_button(void)
+{
+    post(EV_BUTTON, 0);
+}
+
 void dl_wifi_forget(void)
 {
     post(EV_FORGET, 0);

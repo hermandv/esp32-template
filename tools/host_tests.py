@@ -39,6 +39,11 @@ TESTS = {
         [DEVLINK / "dl_improv.c"],
         [DEVLINK / "include"],
     ),
+    "button": (
+        "test/host/test_button.c",
+        [DEVLINK / "dl_button.c"],
+        [DEVLINK / "include"],
+    ),
     "wifi_policy": (
         "test/host/test_wifi_policy.c",
         [DEVLINK / "dl_wifi_policy.c"],

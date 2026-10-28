@@ -195,6 +195,7 @@ def main() -> int:
     ap.add_argument("--port")
     ap.add_argument("--mac", required=True)
     ap.add_argument("--url", required=True)
+    ap.add_argument("--ap", help="config-AP SSID the PC is on (passed by run_via_ap.ps1)")
     ap.add_argument("tests", nargs="*")
     args = ap.parse_args()
     by_name = {f.__name__: f for f in TESTS}

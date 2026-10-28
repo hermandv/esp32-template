@@ -5,6 +5,7 @@
 #include "devlink.h"
 #include "dl_priv.h"
 #include "esp_log.h"
+#include "sdkconfig.h"
 
 static const char *TAG = "devlink";
 
@@ -19,15 +20,21 @@ esp_err_t devlink_start(devlink_mode_t mode)
         ESP_LOGE(TAG, "partition table does not match the frozen devlink layout (SPEC 3.7)");
     }
     err = dl_wifi_start(recovery);
+#if !CONFIG_DEVLINK_TEST_NO_HTTP
     if (err == ESP_OK) {
         err = dl_http_start();
     }
+#else
+    ESP_LOGW(TAG, "TEST BUILD: HTTP API not started (self-test must fail)");
+#endif
     if (err == ESP_OK) {
         (void)dl_dns_start();
         (void)dl_disc_start();
     }
     if (recovery) {
         (void)dl_health_start(); /* even if something above failed: a stuck recovery must get reset */
+    } else {
+        (void)dl_app_start(); /* self-test ends the verify window (SPEC 3.5), button (5.9) */
     }
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "network start failed: %s", esp_err_to_name(err));

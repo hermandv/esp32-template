@@ -7,6 +7,8 @@ param(
     [Parameter(Mandatory)] [string] $Mac,
     [Parameter(Mandatory)] [string] $HomeSsid,
     [string] $ApPassword = "configure",
+    [ValidateSet("recovery", "app")] [string] $Target = "recovery",
+    [string] $Script = "hil_m2_net.py",
     [string] $Tests = ""
 )
 
@@ -14,14 +16,14 @@ $ErrorActionPreference = "Continue"
 $root = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
 $py = Join-Path $env:IDF_PYTHON_ENV_PATH "Scripts\python.exe"
 $id = ($Mac -replace "[^0-9a-fA-F]", "").Substring(6).ToUpper()
-$apSsid = "ESP32S3-REC-$id"
+$apSsid = if ($Target -eq "app") { "ESP32S3-CFG-$id" } else { "ESP32S3-REC-$id" }
 $profileXml = Join-Path $env:TEMP "devlink_ap_profile.xml"
 
 function Log($m) { Write-Output ("[{0:HH:mm:ss}] {1}" -f (Get-Date), $m) }
 
 # 1. Board into recovery over USB while still online.
-Log "putting the board into recovery"
-& $py -c "import sys; sys.path[:0]=[r'$root\test\hil', r'$root\tools']; import devlink_tools as dl; from hil_m1 import Board; from hil_m2 import enter_recovery; b=Board(dl.find_port(None, '$Mac')); b.con.open(); b.con.drain(0.5); enter_recovery(b)"
+Log "putting the board into $Target"
+& $py -c "import sys; sys.path[:0]=[r'$root\test\hil', r'$root\tools']; import devlink_tools as dl; from hil_m1 import Board; from hil_m2 import enter_recovery; b=Board(dl.find_port(None, '$Mac')); b.con.open(); b.con.drain(0.5); enter_recovery(b) if '$Target' == 'recovery' else b.ensure_app_normal()"
 
 try {
     # 2. Temporary profile for the board's AP (manual connect, no auto-switch), then connect.
@@ -53,7 +55,7 @@ try {
     } else {
         Log "joined $apSsid as $ip"
         # 3. Tests.
-        $pyArgs = @("-u", "$root\test\hil\hil_m2_net.py", "--mac", $Mac, "--url", "http://192.168.4.1")
+        $pyArgs = @("-u", "$root\test\hil\$Script", "--mac", $Mac, "--url", "http://192.168.4.1", "--ap", $apSsid)
         if ($Tests) { $pyArgs += $Tests.Split(" ") }
         & $py @pyArgs
         Log "tests exit code $LASTEXITCODE"

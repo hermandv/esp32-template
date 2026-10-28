@@ -1,13 +1,17 @@
 /*
- * bootlab: milestone-1 test app (SPEC §9 tests 11-13b). TEST BUILD ONLY.
+ * bootlab: test app for the HIL tests (SPEC §9). Runs full devlink (self-test, API, OTA). TEST BUILD ONLY.
  *
  * Behaviour for every boot comes from NVS key "mode", set with the console command "mode <value>":
- *   normal         mark valid after 2 s, then idle
- *   crash:<s>      mark valid after 2 s, abort() at <s> seconds              (test 11)
+ *   normal         devlink self-test marks it valid, then idle
+ *   crash:<s>      abort() at <s> seconds                                    (test 11)
  *   sleep          deep sleep forever after 1 s, before ALIVE_5S             (test 12)
  *   sleepwake:<s>[:<n>]  deep sleep with a <s> s timer after 1 s, every wake-up (or n times)  (test 13a)
  *   restart:<s>    planned restart (devlink_restart) after <s> s              (test 13b)
- *   novalid        never mark valid
+ *
+ * Build-time fault variants for the rollback tests (test/fw/bootlab_*.defaults):
+ *   CONFIG_BOOTLAB_FAULT_PANIC  panic right at start                           (test 5)
+ *   CONFIG_BOOTLAB_FAULT_HANG   all of app_main blocked before devlink starts  (test 6: only the RTC WDT helps)
+ *   CONFIG_DEVLINK_TEST_NO_HTTP API never starts, self-test fails after 60 s  (test 7)
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -22,6 +26,8 @@
 #include "freertos/task.h"
 #include "nvs.h"
 #include "nvs_flash.h"
+#include "sdkconfig.h"
+#include "freertos/semphr.h"
 
 static char s_mode[32] = "normal";
 
@@ -90,6 +96,18 @@ void app_main(void)
     printf("DLT bootlab mode=%s\n", s_mode);
     fflush(stdout);
 
+#if CONFIG_BOOTLAB_FAULT_PANIC
+    printf("DLT bootlab FAULT BUILD: panic at start\n");
+    fflush(stdout);
+    abort();
+#endif
+#if CONFIG_BOOTLAB_FAULT_HANG
+    printf("DLT bootlab FAULT BUILD: hanging before the self-test\n");
+    fflush(stdout);
+    SemaphoreHandle_t never = xSemaphoreCreateBinary();
+    (void)xSemaphoreTake(never, portMAX_DELAY); /* blocked, interrupts on: the task WDT sees nothing wrong */
+#endif
+
     if ((strncmp(s_mode, "sleepwake:", 10) == 0) && (s_wakes < sleepwake_limit())) {
         s_wakes++;
         vTaskDelay(pdMS_TO_TICKS(1000));
@@ -107,10 +125,8 @@ void app_main(void)
         esp_deep_sleep_start();
     }
 
+    devlink_start(DEVLINK_MODE_APP); /* Wi-Fi, API; the self-test marks this app valid */
     vTaskDelay(pdMS_TO_TICKS(2000));
-    if (strcmp(s_mode, "novalid") != 0) {
-        devlink_mark_valid(); /* self-test placeholder */
-    }
 
     unsigned crash_s = mode_arg("crash:");
     unsigned restart_s = mode_arg("restart:");

@@ -1,4 +1,4 @@
-# ESP32-S3 Bench Template – Specification (v0.6 draft)
+# ESP32-S3 Bench Template – Specification (v0.7 draft)
 
 A reusable firmware + PC tool template for bringing up and testing ESP32-S3 hardware boards over Wi-Fi.
 Working name for the shared firmware layer: **devlink**.
@@ -20,7 +20,10 @@ Changes in v0.6 (milestone 2, recovery image): Improv serial implemented in devl
 console lines `devlink info|status|restart` added; no JSON library (small flat-object reader, §5.6); API details
 fixed (wrong `X-Device-Id` → 409, `factory-reset` option `nvs`, `/channels` lists `log` until streaming arrives);
 dlcfg field `sta_retry_s` renamed `button_window_s` (same position, defaults 20 s / 120 s); bootloader version also
-in the IDF bootloader descriptor; recovery RTC WDT 30 s.
+in the IDF bootloader descriptor; recovery RTC WDT 30 s. OTA uploads run in their own task (§7.1).
+
+Changes in v0.7 (milestone 3, devlink in the app): app self-test and rollback implementation fixed (§3.5), button
+implemented (§5.9), `app/` template project added.
 
 ---
 
@@ -202,6 +205,18 @@ records, full sector, every decision branch) and the full fault-injection run in
    timers (`ALIVE_5S` at 5 s, `STABLE` at 120 s and after marking valid), config load. Test modules start only after that.
 8. All planned restarts go through `devlink_restart()`, which sets `CLEAN_RESTART` first, so OTA reboots and
    `/reboot` never count towards the crash-loop guard.
+
+Implementation (milestone 3, `dl_app.c`):
+- The self-test runs in `devlink_start(DEVLINK_MODE_APP)`: every 500 ms it checks that the HTTP server task answers
+  (queued work, < 5 s old) and that the STA is connected or the config AP is on. Pass → `devlink_mark_valid()`
+  (valid + RTC WDT off) — on **every** boot, not only after an OTA, because the RTC WDT runs from the bootloader on
+  every boot.
+- Not passed within `CONFIG_DEVLINK_SELFTEST_S` (60 s) while `PENDING_VERIFY` → `devlink_restart()`. The bootloader
+  then finds the image still pending and rolls back itself, so the restored app reports `boot_reason=rollback`
+  (`esp_ota_mark_app_invalid_rollback_and_reboot()` would mark it invalid first and the reason would be lost).
+- Not passed while the app is already valid → no rollback possible; the RTC WDT stays on and resets the board after
+  90 s, and the crash-loop guard takes a repeatedly failing app to recovery.
+- Test builds: `bootlab` fault variants (`test/fw/bootlab_{panic,hang,noapi}.defaults`) for tests 5, 6, 7.
 
 ### 3.6 What can only be changed over USB
 
@@ -423,6 +438,9 @@ Built-in channels: `sys.temp` (die temperature, low absolute accuracy), `sys.hea
   bootloader input; anything on the board holding GPIO0 low makes every reset land in download mode.
   - 3 s hold → config AP. 10 s hold → reboot into recovery (one-shot flag).
   - A button that reads pressed at boot is treated as stuck and ignored until released.
+  - Implementation: `CONFIG_DEVLINK_BUTTON_GPIO` (default 0, -1 = none), app only, sampled every 50 ms. The AP action
+    fires once when the hold reaches 3 s, recovery when it reaches 10 s (no release needed). Logic in `dl_button.c`
+    (host-tested). Recovery does not use the button (its AP is always on).
 - Status LED (optional): config AP open, connecting, connected, OTA in progress, recovery – distinct patterns.
 
 ---

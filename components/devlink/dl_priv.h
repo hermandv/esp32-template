@@ -63,6 +63,8 @@ void dl_wifi_get_status(dl_wifi_status_t *st);
 esp_err_t dl_wifi_set(dl_wifi_src_t src, const char *ssid, const char *password);
 /** Blocking scan (<= ~4 s). */
 esp_err_t dl_wifi_scan(dl_wifi_ap_rec_t *out, size_t max, size_t *n);
+/** Button held 3 s: open the config AP for the button window. */
+void dl_wifi_button(void);
 /** Factory reset: forget credentials, AP only. */
 void dl_wifi_forget(void);
 /** Wait until the STA has an IP or the attempt failed. Returns true if connected. */
@@ -113,6 +115,7 @@ void dl_rwdt_set(uint32_t ms);
 void dl_rwdt_feed(void);
 void dl_rwdt_disable(void);
 esp_err_t dl_health_start(void);
+esp_err_t dl_app_start(void);
 void dl_note_error(const char *err);
 const char *dl_last_error(void);
 

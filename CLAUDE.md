@@ -1,6 +1,6 @@
 # ESP32-S3 Bench Template (devlink)
 
-The design lives in `SPEC.md` (v0.6). Read it before changing anything; it is the source of truth.
+The design lives in `SPEC.md` (v0.7). Read it before changing anything; it is the source of truth.
 `SPEC_v0.2.md` is an old version kept for reference only.
 
 ## Ground rules
@@ -23,13 +23,16 @@ The design lives in `SPEC.md` (v0.6). Read it before changing anything; it is th
 |---|---|
 | Host unit tests (run before flashing) | `py -3.12 tools/host_tests.py` |
 | Build recovery (+ the devlink bootloader) | `idf.py -C recovery -B build/recovery build` |
+| Build the app template | `idf.py -C app -B build/app build` |
 | Build the bootlab test app | `idf.py -C test/fw/bootlab -B build/bootlab build` |
+| Bootlab fault variants (tests 5/6/7) | `idf.py -C test/fw/bootlab -B build/bootlab_<v> -DDEVLINK_EXTRA_DEFAULTS=<repo>/test/fw/bootlab_<v>.defaults build`, `<v>` = panic, hang, noapi |
 | Crash-test recovery (test 20) | `idf.py -C recovery -B build/recovery_crash -DDEVLINK_EXTRA_DEFAULTS=<repo>/test/fw/recovery_crash.defaults build` |
 | First flash / full re-flash (erases everything) | `python tools/flash_all.py --mac 7c:df:a1:f2:50:30 --label "..."` |
 | HIL tests, automatic | `python test/hil/hil_m1.py --mac 7c:df:a1:f2:50:30` |
 | HIL tests needing power cycles | `python test/hil/hil_m1.py --port COM22 m_quick_power_cycles m_power_cycle_in_recovery m_dlcfg_power_cut` |
 | HIL tests, recovery over USB (milestone 2) | `python test/hil/hil_m2.py --mac 7c:df:a1:f2:50:30` |
 | HIL network tests via the board AP (PC offline meanwhile) | `powershell -File test/hil/run_via_ap.ps1 -Mac 7c:df:a1:f2:50:30 -HomeSsid 10X` |
+| HIL app tests: OTA cycles, rollbacks (milestone 3, via the app AP) | `powershell -File test/hil/run_via_ap.ps1 -Mac 7c:df:a1:f2:50:30 -HomeSsid 10X -Target app -Script hil_m3_net.py` |
 
 Board console over USB: `devlink info|status|restart|recovery|label <text>` and Improv Wi-Fi serial. Test builds add
 the HIL test console (`info`, `restart`, `crash`, `mode ...`, ...).

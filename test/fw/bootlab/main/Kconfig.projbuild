@@ -1,0 +1,11 @@
+menu "bootlab (test app) fault variants"
+
+    config BOOTLAB_FAULT_PANIC
+        bool "Panic right at start (acceptance test 5)"
+        default n
+
+    config BOOTLAB_FAULT_HANG
+        bool "Hang before the self-test, all of app_main blocked (acceptance test 6)"
+        default n
+
+endmenu

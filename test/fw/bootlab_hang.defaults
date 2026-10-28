@@ -1,0 +1,3 @@
+# bootlab fault variant 'hang' for the rollback tests. TEST BUILD ONLY.
+CONFIG_BOOTLAB_FAULT_HANG=y
+CONFIG_APP_PROJECT_VER="bootlab-fault-hang"

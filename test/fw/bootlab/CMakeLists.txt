@@ -7,7 +7,8 @@ set(EXTRA_COMPONENT_DIRS
     "${DEVLINK_ROOT}/components"
     "${DEVLINK_ROOT}/bootloader_components/devlink_boot"
     "${DEVLINK_ROOT}/test/fw/components")
-set(SDKCONFIG_DEFAULTS "${DEVLINK_ROOT}/tools/sdkconfig.defaults.devlink;sdkconfig.defaults")
+# -DDEVLINK_EXTRA_DEFAULTS=<file> adds a defaults file (fault variants: test/fw/bootlab_*.defaults).
+set(SDKCONFIG_DEFAULTS "${DEVLINK_ROOT}/tools/sdkconfig.defaults.devlink;sdkconfig.defaults" ${DEVLINK_EXTRA_DEFAULTS})
 
 # sdkconfig lives in the build directory: one per build variant, generated from the defaults files.
 set(SDKCONFIG "${CMAKE_BINARY_DIR}/sdkconfig")
