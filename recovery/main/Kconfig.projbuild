@@ -1,0 +1,7 @@
+menu "devlink recovery (test options)"
+
+    config DEVLINK_TEST_RECOVERY_CRASH
+        bool "TEST BUILD: crash at start (acceptance test 20)"
+        default n
+
+endmenu

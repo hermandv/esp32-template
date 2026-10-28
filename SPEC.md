@@ -1,4 +1,4 @@
-# ESP32-S3 Bench Template – Specification (v0.4 draft)
+# ESP32-S3 Bench Template – Specification (v0.5 draft)
 
 A reusable firmware + PC tool template for bringing up and testing ESP32-S3 hardware boards over Wi-Fi.
 Working name for the shared firmware layer: **devlink**.
@@ -9,6 +9,11 @@ recovery self-test after a recovery update, safe Wi-Fi change, fixed API key, fa
 
 Changes in v0.4: boot counters moved to a flash **boot log** that survives power loss (ESPHome-style, §3.4);
 reset-button presses count like power cycles; USB Wi-Fi setup uses the **Improv serial** standard (§5.4).
+
+Changes in v0.5 (milestone 1 implementation): **recovery-loop check now also suppresses the quick-reset escape**
+(a recovery that crashed before 5 s re-entered itself forever); records with `CLEAN_RESTART` don't count as quick
+resets (test 13b); boot reasons `recovery_loop` and `deep_sleep` added; recovery marks its own record `RECOVERY`;
+retained-RTC block and `dlcfg` record layouts fixed (§3.4, §5.3); bootloader flash mode DIO; ESP-IDF v6.0.3 pinned.
 
 ---
 
@@ -34,7 +39,7 @@ reset-button presses count like power cycles; USB Wi-Fi setup uses the **Improv 
 | Item | Choice |
 |---|---|
 | MCU | ESP32-S3 (any module), **8 MB flash minimum** (4 MB layout in §3.7) |
-| Framework | ESP-IDF, **one pinned release** for bootloader, recovery and apps (see §3.6 on upgrades) |
+| Framework | ESP-IDF, **one pinned release** for bootloader, recovery and apps (see §3.6 on upgrades): **v6.0.3** |
 | Language | C (C++ allowed in test modules) |
 | PC app | Python 3.11+, Windows first, Linux should work |
 
@@ -86,6 +91,10 @@ ROM bootloader (fixed in silicon)
 - Standard `CONFIG_BOOTLOADER_FACTORY_RESET` is **not** used: it erases `otadata` (loses which slot is good).
   The custom logic in §3.4 replaces it.
 - Anti-rollback, secure boot, flash encryption: **off**.
+- Flash mode **DIO** (works on every quad-flash module), 8 MB, 80 MHz. Bootloader RTC WDT 9 s; the image takes it
+  over as its first step (§3.5).
+- All of this lives in `tools/sdkconfig.defaults.devlink`, included by every image. Each build keeps its `sdkconfig`
+  in its build directory, so build variants (e.g. test builds) can't leak into each other.
 
 ### 3.4 Boot decision (custom bootloader override, ~250 lines)
 
@@ -100,7 +109,7 @@ loop interrupted by power cycles is still caught.
   | Bit (cleared = set) | Written by | Meaning |
   |---|---|---|
   | b0 `STARTED` | bootloader | a boot happened |
-  | b1 `RECOVERY` | bootloader | this boot went to `factory` |
+  | b1 `RECOVERY` | bootloader, recovery | this boot went to `factory` (recovery also sets it itself, which covers the loader falling back to `factory`) |
   | b2 `ALIVE_5S` | app / recovery | ran ≥ 5 s |
   | b3 `STABLE` | app / recovery | ran ≥ 120 s (app: also marked valid) |
   | b4 `CLEAN_RESTART` | app / recovery | planned restart via `devlink_restart()` (OTA, `/reboot`, config change) |
@@ -109,20 +118,35 @@ loop interrupted by power cycles is still caught.
   8 records over (write them into the fresh sector). Wear is negligible.
 - **Deep-sleep wake-ups are not logged** (reset reason checked first), so sleeping test apps don't trip the counters.
 - Torn write (power loss while writing a record) leaves a byte with only some bits cleared; the rules below treat it
-  as an unconfirmed boot, which errs towards recovery, never towards a brick.
+  as an unconfirmed boot, which errs towards recovery, never towards a brick. Any byte other than `0xFF` is a record;
+  a torn write that left `0xFF` is simply reused by the next boot. Power loss between the rollover erase and the
+  carry-over leaves an empty log: the guards only start counting again (never a wrong recovery).
+- The running image finds its own record as the last non-`0xFF` byte and marks it (`ALIVE_5S` at 5 s, `STABLE` at
+  120 s once valid, `CLEAN_RESTART` in `devlink_restart()`).
+- Note for development: an esptool/`idf.py flash` reset interrupts the running boot, which stays unconfirmed. Five
+  flashes in a row within 2 minutes each therefore end in recovery (crash-loop guard). A planned restart
+  (`devlink_restart()`) in between clears the chain.
 
 #### Decision order, on every reset
 
 1. **One-shot recovery request**: retained-RTC flag `REQ_RECOVERY`, set by app/recovery before `devlink_restart()`.
    → clear flag, boot `factory`. Used for "reboot to recovery" (button 10 s, API, USB console, recovery self-test §7.3).
    Does not touch `otadata`, so slot states are kept. A power cycle clears it (→ back to app).
-2. **Quick-reset escape** (physical, needs no app code): the last **3** records all lack `ALIVE_5S`
-   → boot `factory`. Triggered by 3 power cycles **or 3 presses of the EN/reset button**, each within ~5 s of the
-   previous boot. Works even if the app is hostile or foreign (deep sleep forever, Wi-Fi off, hung, non-devlink).
+   **Recovery loop** (checked before rules 2 and 3): the last **3** records are all `RECOVERY` boots that lack
+   `STABLE` and `CLEAN_RESTART` → rules 2 and 3 do not send the board to `factory` again.
+2. **Quick-reset escape** (physical, needs no app code): the last **3** records all lack `ALIVE_5S` (and
+   `CLEAN_RESTART`), and no recovery loop → boot `factory`. Triggered by 3 power cycles **or 3 presses of the
+   EN/reset button**, each within ~5 s of the previous boot. Works even if the app is hostile or foreign (deep sleep
+   forever, Wi-Fi off, hung, non-devlink). Planned restarts don't count, so quick OTA/`/reboot` sequences are safe.
 3. **Crash-loop guard**: the last **5** records all lack `STABLE` and `CLEAN_RESTART` → boot `factory`.
    Catches crashes, watchdog resets, brownouts and hangs-then-power-cycle, whatever the reset reason.
-   - If the last **3** unconfirmed records are themselves `RECOVERY` boots (recovery is crash-looping too) → boot the
-     last valid app slot instead. A broken recovery can't become a brick while a good app exists.
+   - If there is a recovery loop (recovery is crash-looping too) → boot the last valid app slot instead (standard
+     selection, but the OTA slots are tried before `factory`), boot reason `recovery_loop`. A broken recovery can't
+     become a brick while a good app exists.
+   - v0.4 applied this exception to rule 3 only. A recovery that crashes before 5 s never sets `ALIVE_5S`, so rule 2
+     kept re-entering it and rule 3 was never reached (found in the milestone 1 host tests). The exception now
+     covers both rules. This **strengthens** I1/I2; the only cost: with a broken recovery, 3 quick power cycles
+     right after 3 recovery crashes boot the app instead of recovery, which is the only useful choice anyway.
 4. **Recovery GPIO** (optional, board config, non-strapping pin only): held low at reset → boot `factory`.
 5. Otherwise: standard ESP-IDF selection (otadata + rollback; falls back to the other slot or `factory` if the selected
    image fails validation; `factory` if otadata is blank or both copies are corrupt).
@@ -130,8 +154,21 @@ loop interrupted by power cycles is still caught.
 Thresholds (3 / 5 s, 5 / 120 s) are compile-time constants in the bootloader, so pick them before the first USB flash.
 
 The bootloader passes the **boot reason** to the image in retained RTC
-(`normal`, `rollback`, `requested`, `quick_reset`, `crash_loop`, `gpio`, `no_valid_app`), reported by `/info`.
-Because the counters live in flash, they don't depend on retained RTC surviving a brownout reset.
+(`normal`, `rollback`, `requested`, `quick_reset`, `crash_loop`, `gpio`, `no_valid_app`, `recovery_loop`,
+`deep_sleep`), reported by `/info`. Because the counters live in flash, they don't depend on retained RTC surviving a
+brownout reset.
+
+Retained-RTC block (`CONFIG_BOOTLOADER_CUSTOM_RESERVE_RTC_SIZE` = 16, `rtc_retain_mem_t.custom`, layout frozen):
+`magic "DLLT"` (u32), `version` (u8), `req` (u8, `0xA5` = REQ_RECOVERY), `boot_reason` (u8), `target` (u8),
+`start_offset` (u32, partition the bootloader started), `crc32` (u32) — own CRC, because IDF's CRC does not cover the
+custom area. The bootloader first makes IDF's retain area valid (`bootloader_common_update_rtc_retain_mem`):
+otherwise the IDF loader clears the whole area, custom block included, on the first boot after power-on.
+If the loader then rejects the chosen image and falls back, the image sees `start_offset` ≠ running partition and
+reports `no_valid_app`.
+
+Implementation: `bootloader_components/devlink_boot` (record format, rules, RTC block: pure C, also linked into
+recovery and app, host-tested in `test/host`) and `bootloader_components/main` (copy of the IDF v6.0.3
+`bootloader_start.c`, partition selection replaced by `devlink_boot_select()`).
 
 The bootloader is the one part that cannot be fixed without USB. It gets its own unit tests (boot-log parsing, torn
 records, full sector, every decision branch) and the full fault-injection run in §9 before any board gets it.
@@ -223,7 +260,10 @@ components/
 recovery/             IDF project → factory image
 app/                  IDF project → test app template
 pc/                   Python PC app
-tools/                flash_all.py, partition CSVs, shared sdkconfig.defaults, release script
+tools/                flash_all.py, partition CSVs, shared sdkconfig.defaults, release script, host_tests.py
+test/host/            host unit tests of the pure-C parts (boot log + rules, RTC block, dlcfg format)
+test/fw/              test-only firmware: bootlab test app, test console, crash-test build options
+test/hil/             hardware-in-the-loop scripts (§9)
 ```
 
 A shared `sdkconfig.defaults.devlink` holds everything both images must agree on (bootloader options, partition table,
@@ -247,6 +287,11 @@ with an IDF whose NVS format the recovery doesn't understand.
 `dlcfg` = two 4 KB sectors, each holding one record: `magic, format_version, sequence, crc32, payload`.
 - Read: newest valid record by sequence; none valid → defaults (no credentials → AP mode).
 - Write: always into the *other* sector, then it becomes newest. Power loss during a write leaves the old record valid.
+  The body is written first and the 16-byte header last, so a torn write never looks valid.
+- Record layout (frozen): header `magic "DCFG"` (u32), `format_version` (u16), `payload_len` (u16), `sequence` (u32,
+  newest = larger, wrap-safe), `crc32` (u32, over the 12 header bytes before it, then the payload); payload =
+  `dlcfg_t` (`components/devlink/include/dlcfg_core.h`, 272 bytes in format 1). A shorter payload (older writer)
+  keeps defaults for the missing fields. `tools/devlink_tools.py` builds the same record for `flash_all.py`.
 - Payload: Wi-Fi (current + previous credentials), label, config-window times, log level, reset-reason ring.
 - Format changes are additive only (new fields at the end, older readers ignore them), so an old recovery can read
   a config written by a newer app.
@@ -584,7 +629,11 @@ Grouped by invariant. All run on the oldest bootloader in use.
 
 ## 12. Open questions
 
-- Flash size of the boards in use (8 MB vs 4 MB layout)? Any octal-flash modules?
+- Flash size of the boards in use (8 MB vs 4 MB layout)? Any octal-flash modules? *(Bench board 1: ESP32-S3 rev
+  v0.1, 8 MB quad flash, 2 MB embedded PSRAM → 8 MB layout. Other boards still open.)*
+- Should a host-initiated chip reset (esptool / `idf.py flash`, reset reason USB-Serial/JTAG) count as a planned
+  restart, so repeated flashing during development never trips the crash-loop guard? (Bootloader change: decide
+  before boards are frozen.)
 - Do the boards have a spare non-strapping pin for a recovery button/jumper (optional §3.4 rule 4)?
 - Bench network: same subnet as the PC, mDNS/broadcast allowed, no client isolation, 2.4 GHz WPA2/WPA3-Personal?
 - Are the boot-log thresholds right for your bench: 3 resets within ~5 s → recovery; 5 boots that never reach 120 s → recovery?

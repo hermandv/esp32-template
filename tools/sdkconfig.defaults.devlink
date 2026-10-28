@@ -1,0 +1,37 @@
+# devlink shared configuration (SPEC §3.3, §3.6, §5.1).
+# Included by EVERY image (recovery, app, test images). The bootloader and partition options are FROZEN once a
+# board is flashed over USB: changing them needs a USB re-flash of every board.
+
+CONFIG_IDF_TARGET="esp32s3"
+
+# ---- Flash and partition table (§3.7) ----
+CONFIG_ESPTOOLPY_FLASHSIZE_8MB=y
+# DIO works on every quad-flash module; the bootloader fixes the mode for all images.
+CONFIG_ESPTOOLPY_FLASHMODE_DIO=y
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="../tools/partitions_8mb.csv"
+
+# ---- Bootloader (§3.3) ----
+CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y
+# CONFIG_BOOTLOADER_APP_ANTI_ROLLBACK is not set
+CONFIG_BOOTLOADER_WDT_ENABLE=y
+# RTC WDT keeps running into the image; devlink takes it over first thing in app_main (§3.5).
+CONFIG_BOOTLOADER_WDT_DISABLE_IN_USER_CODE=y
+CONFIG_BOOTLOADER_WDT_TIME_MS=9000
+CONFIG_BOOTLOADER_CUSTOM_RESERVE_RTC=y
+CONFIG_BOOTLOADER_CUSTOM_RESERVE_RTC_SIZE=0x10
+# CONFIG_BOOTLOADER_CUSTOM_RESERVE_RTC_IN_CRC is not set
+# CONFIG_BOOTLOADER_FACTORY_RESET is not set
+# CONFIG_BOOTLOADER_APP_TEST is not set
+# Image validation always on.
+# CONFIG_BOOTLOADER_SKIP_VALIDATE_IN_DEEP_SLEEP is not set
+# CONFIG_BOOTLOADER_SKIP_VALIDATE_ON_POWER_ON is not set
+# CONFIG_BOOTLOADER_SKIP_VALIDATE_ALWAYS is not set
+CONFIG_BOOTLOADER_COMPILER_OPTIMIZATION_SIZE=y
+CONFIG_BOOTLOADER_LOG_LEVEL_INFO=y
+# CONFIG_SECURE_BOOT is not set
+# CONFIG_SECURE_FLASH_ENC_ENABLED is not set
+
+# ---- Protection against test modules (§3.6) ----
+CONFIG_EFUSE_VIRTUAL=y
+CONFIG_SPI_FLASH_DANGEROUS_WRITE_ABORTS=y

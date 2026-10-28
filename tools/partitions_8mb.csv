@@ -1,0 +1,12 @@
+# devlink partition table, 8 MB flash (SPEC §3.7). FROZEN: flashed once over USB, never changed over Wi-Fi.
+# Name,     Type, SubType,  Offset,   Size
+nvs,        data, nvs,      0x9000,   0x6000
+otadata,    data, ota,      0xF000,   0x2000
+phy_init,   data, phy,      0x11000,  0x1000
+dlcfg,      data, 0x40,     0x12000,  0x2000
+dlboot,     data, 0x41,     0x14000,  0x1000
+factory,    app,  factory,  0x20000,  0x180000
+ota_0,      app,  ota_0,    0x1A0000, 0x300000
+ota_1,      app,  ota_1,    0x4A0000, 0x300000
+coredump,   data, coredump, 0x7A0000, 0x10000
+storage,    data, littlefs, 0x7B0000, 0x50000

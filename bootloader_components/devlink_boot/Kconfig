@@ -1,0 +1,11 @@
+menu "devlink bootloader"
+
+    config DEVLINK_BOOT_RECOVERY_GPIO
+        int "Recovery GPIO (held low at reset -> recovery), -1 = none"
+        default -1
+        range -1 48
+        help
+            SPEC §3.4 rule 4, optional. Must be a non-strapping pin (never GPIO0, 3, 45, 46) and not GPIO19/20
+            (USB). Frozen with the bootloader.
+
+endmenu

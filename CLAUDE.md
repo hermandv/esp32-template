@@ -17,6 +17,21 @@ The design lives in `SPEC.md` (v0.4). Read it before changing anything; it is th
 - Use `py -3.12`, not `python` (not on PATH outside the IDF environment).
 - Log new installs in `tools/installed_tools.md`, and ask before installing anything new.
 
+## Commands (PowerShell with ESP-IDF active, from the repo root)
+
+| Step | Command |
+|---|---|
+| Host unit tests (run before flashing) | `py -3.12 tools/host_tests.py` |
+| Build recovery (+ the devlink bootloader) | `idf.py -C recovery -B build/recovery build` |
+| Build the bootlab test app | `idf.py -C test/fw/bootlab -B build/bootlab build` |
+| Crash-test recovery (test 20) | `idf.py -C recovery -B build/recovery_crash -DDEVLINK_EXTRA_DEFAULTS=<repo>/test/fw/recovery_crash.defaults build` |
+| First flash / full re-flash (erases everything) | `python tools/flash_all.py --mac 7c:df:a1:f2:50:30 --label "..."` |
+| HIL tests, automatic | `python test/hil/hil_m1.py --mac 7c:df:a1:f2:50:30` |
+| HIL tests needing power cycles | `python test/hil/hil_m1.py m_quick_power_cycles m_power_cycle_in_recovery m_dlcfg_power_cut` |
+
+`python` here is the IDF env's Python (on PATH once the IDF environment is active). Each build keeps its `sdkconfig`
+in its build directory; never commit an `sdkconfig` in a project folder.
+
 ## Bench board
 - ESP32-S3 rev v0.1, 8 MB quad flash, 2 MB PSRAM, native USB-Serial/JTAG, MAC 7c:df:a1:f2:50:30 (COM22 today; COM numbers can change).
 - No switchable USB power: when a test needs real power cycles, stop and ask the user to unplug/replug, saying how many
