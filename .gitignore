@@ -1,0 +1,22 @@
+# ESP-IDF build output
+build/
+build_*/
+sdkconfig
+sdkconfig.old
+managed_components/
+dependencies.lock
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
+
+# Editors / OS
+.vscode/
+.idea/
+Thumbs.db
+.DS_Store
+
+# Local Claude settings
+.claude/settings.local.json
