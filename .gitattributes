@@ -1,0 +1,14 @@
+# Normalise line endings: LF in the repo and working tree for sources/docs (ESP-IDF, CMake and
+# Python tools all expect LF); Windows-only scripts keep CRLF.
+* text=auto eol=lf
+
+*.ps1 text eol=crlf
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+*.bin binary
+*.elf binary
+*.png binary
+*.jpg binary
+*.pdf binary
+*.zip binary
