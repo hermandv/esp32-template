@@ -572,7 +572,7 @@ Implementation notes (milestone 2, found on the bench):
 Stack: PySide6 (Qt), pyqtgraph, zeroconf (mDNS), httpx, websockets/QtWebSockets, pyserial (Improv serial client),
 `netsh` wrapper (Wi-Fi scan / join on Windows). PyInstaller single exe.
 
-Implementation (milestone 5, `pc/devlink_pc/`, venv `pc/.venv`, `pc/requirements.txt`, run `pc.venvScriptspython pcdevlink.py`):
+Implementation (milestone 5, `pc/devlink_pc/`, venv `pc/.venv`, `pc/requirements.txt`, run `pc/.venv/Scripts/python pc/devlink.py`):
 - A Qt-free library (`image`, `api`, `discovery`, `ota`, `improv`, `wifi_win`, `configure`) used by the GUI and by
   the HIL tests; the GUI runs every network call in a worker thread. `requests` instead of httpx.
 - OTA uploads send `Content-Length` (the upload body object needs `tell()`, or requests falls back to chunked).
