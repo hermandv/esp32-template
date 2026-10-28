@@ -292,6 +292,13 @@ static esp_err_t h_ota(httpd_req_t *req)
     if (!authorized(req)) {
         return ESP_OK;
     }
+    /* The upload needs Content-Length; a chunked body would be read as image bytes (chunk sizes included). */
+    char te[16];
+    if (httpd_req_get_hdr_value_str(req, "Transfer-Encoding", te, sizeof(te)) == ESP_OK) {
+        httpd_resp_set_hdr(req, "Connection", "close");
+        (void)send_error(req, "411 Length Required", "chunked_upload_not_supported");
+        return ESP_FAIL;
+    }
     bool to_recovery = (strcmp(target, "recovery") == 0);
     if (!to_recovery && (strcmp(target, "app") != 0)) {
         return send_error(req, "400 Bad Request", "bad_target");

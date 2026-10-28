@@ -1,0 +1,9 @@
+# devlink PC app (SPEC §8). Pinned; installed into pc/.venv (Python 3.12):
+#   py -3.12 -m venv pc\.venv
+#   pc\.venv\Scripts\python -m pip install -r pc\requirements.txt
+PySide6==6.11.2
+zeroconf==0.151.5
+requests==2.34.2
+websockets==17.3
+pyserial==3.5
+pytest==9.1.1

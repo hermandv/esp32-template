@@ -327,6 +327,15 @@ void dl_wifi_get_status(dl_wifi_status_t *st)
     }
 }
 
+#define LAN_SET_DELAY_MS 1000u
+static esp_timer_handle_t s_set_timer;
+
+static void deferred_set(void *arg)
+{
+    (void)arg;
+    post(EV_SET, 0);
+}
+
 esp_err_t dl_wifi_set(dl_wifi_src_t src, const char *ssid, const char *password)
 {
     size_t sl = strlen(ssid);
@@ -344,7 +353,18 @@ esp_err_t dl_wifi_set(dl_wifi_src_t src, const char *ssid, const char *password)
     memcpy(s_new_pass, password, pl);
     s_new_src = src;
     xSemaphoreGive(s_lock);
-    post(EV_SET, 0);
+    if (src == DL_WIFI_SRC_LAN) {
+        /* Over the LAN the STA link is about to be dropped for the new settings: let the HTTP reply ("pending")
+         * leave the board first, otherwise the client never sees it. */
+        if (s_set_timer == NULL) {
+            const esp_timer_create_args_t a = {.callback = deferred_set, .name = "dl_wifi_set"};
+            (void)esp_timer_create(&a, &s_set_timer);
+        }
+        (void)esp_timer_stop(s_set_timer);
+        (void)esp_timer_start_once(s_set_timer, LAN_SET_DELAY_MS * 1000u);
+    } else {
+        post(EV_SET, 0);
+    }
     return ESP_OK;
 }
 

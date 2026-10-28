@@ -30,10 +30,12 @@ static void send_frame(const uint8_t *f, size_t n)
     if (n == 0u) {
         return;
     }
+    /* Binary frame: write it to the driver directly. Through stdout every 0x0A byte (a length, the checksum or data)
+     * would become "\r\n" (newline conversion) and corrupt the frame. */
     xSemaphoreTake(s_out_lock, portMAX_DELAY);
-    fwrite(f, 1, n, stdout);
-    fputc('\n', stdout);
-    fflush(stdout);
+    fflush(stdout); /* keep the order with text already printed */
+    (void)usb_serial_jtag_write_bytes(f, n, pdMS_TO_TICKS(100));
+    (void)usb_serial_jtag_write_bytes("\n", 1, pdMS_TO_TICKS(100));
     xSemaphoreGive(s_out_lock);
 }
 

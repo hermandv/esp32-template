@@ -1,4 +1,4 @@
-# ESP32-S3 Bench Template – Specification (v0.8 draft)
+# ESP32-S3 Bench Template – Specification (v0.9 draft)
 
 A reusable firmware + PC tool template for bringing up and testing ESP32-S3 hardware boards over Wi-Fi.
 Working name for the shared firmware layer: **devlink**.
@@ -27,6 +27,10 @@ implemented (§5.9), `app/` template project added.
 
 Changes in v0.8 (milestone 4, streaming): WebSocket protocol details, batching, rates and slow-client handling fixed
 (§5.7); `devlink_sysmon` and `mod_example` added; `devlink_sleep()` and `devlink_channel_wanted_hz()` in the module API.
+
+Changes in v0.9 (milestone 5, PC app Devices + Firmware): PC stack without httpx (requests in worker threads); a LAN
+Wi-Fi change takes effect 1 s after the reply (§5.4); Improv frames bypass stdout newline conversion (§5.4); chunked
+OTA uploads are refused with 411 (§7.1); PC app implementation notes (§8).
 
 ---
 
@@ -346,7 +350,8 @@ retries every 15 s with back-off to 60 s.
 **Changing Wi-Fi settings safely (I6)**
 - Changed **over the LAN** (device currently connected): new settings are saved as *pending*; device reconnects with them.
   If they don't connect within 30 s, it reverts to the previous settings and reports `wifi_change_failed`.
-  You cannot lose a working board by typing the wrong password.
+  You cannot lose a working board by typing the wrong password. The device answers `{"mode":"pending"}` first and
+  switches 1 s later: dropping the STA link at once lost the reply (found on the bench, test 24).
 - Changed **through the config AP** (current settings already failing): saved directly.
 
 **Config AP**
@@ -359,7 +364,10 @@ retries every 15 s with back-off to 60 s.
 
 **USB provisioning – Improv serial** (app and recovery)
 - Wi-Fi over USB uses the open **Improv Wi-Fi serial** protocol (v1), implemented in devlink (`dl_improv.c`, host-tested;
-  no registry component), on the native USB-Serial-JTAG port, alongside normal log output.
+  no registry component), on the native USB-Serial-JTAG port, alongside normal log output. Frames are written to the
+  USB-Serial/JTAG driver directly, not through stdout: stdout turns every 0x0A byte (a length, checksum or data byte)
+  into "
+" and corrupts the frame (found with a 10-character device name).
 - Supported Improv commands: current state, device info (firmware name/version, chip, device name = label or id),
   scan networks, send Wi-Fi settings. After connecting, the device returns its URL (`http://<ip>/`).
 - Works from the PC app (pyserial) and from any browser tool that speaks Improv (e.g. ESP Web Tools), so a board can be
@@ -563,6 +571,15 @@ Implementation notes (milestone 2, found on the bench):
 
 Stack: PySide6 (Qt), pyqtgraph, zeroconf (mDNS), httpx, websockets/QtWebSockets, pyserial (Improv serial client),
 `netsh` wrapper (Wi-Fi scan / join on Windows). PyInstaller single exe.
+
+Implementation (milestone 5, `pc/devlink_pc/`, venv `pc/.venv`, `pc/requirements.txt`, run `python -m devlink_pc`):
+- A Qt-free library (`image`, `api`, `discovery`, `ota`, `improv`, `wifi_win`, `configure`) used by the GUI and by
+  the HIL tests; the GUI runs every network call in a worker thread. `requests` instead of httpx.
+- OTA uploads send `Content-Length` (the upload body object needs `tell()`, or requests falls back to chunked).
+- The configure flow forces a Windows Wi-Fi scan (WlanScan) before joining/rejoining an AP; netsh output is parsed in
+  English.
+- The bench Wi-Fi password is never stored; the configure dialog asks for it each time.
+- Monitor tab: milestone 6.
 
 ### 8.1 Devices tab
 - Table keyed by **MAC**: id, label, IP, hostname, mode (app / recovery / needs-config), boot reason, app ver,

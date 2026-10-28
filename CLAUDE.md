@@ -1,6 +1,6 @@
 # ESP32-S3 Bench Template (devlink)
 
-The design lives in `SPEC.md` (v0.8). Read it before changing anything; it is the source of truth.
+The design lives in `SPEC.md` (v0.9). Read it before changing anything; it is the source of truth.
 `SPEC_v0.2.md` is an old version kept for reference only.
 
 ## Ground rules
@@ -34,6 +34,9 @@ The design lives in `SPEC.md` (v0.8). Read it before changing anything; it is th
 | HIL network tests via the board AP (PC offline meanwhile) | `powershell -File test/hil/run_via_ap.ps1 -Mac 7c:df:a1:f2:50:30 -HomeSsid 10X` |
 | HIL app tests: OTA cycles, rollbacks (milestone 3, via the app AP) | `powershell -File test/hil/run_via_ap.ps1 -Mac 7c:df:a1:f2:50:30 -HomeSsid 10X -Target app -Script hil_m3_net.py` |
 | HIL streaming tests (milestone 4, via the app AP) | `powershell -File test/hil/run_via_ap.ps1 -Mac 7c:df:a1:f2:50:30 -HomeSsid 10X -Target app -Script hil_m4_net.py` |
+| PC app | `pc\.venv\Scripts\python -m devlink_pc` (setup: see `pc/requirements.txt`) |
+| PC app unit + GUI tests | `pc\.venv\Scripts\python -m pytest pc/tests` |
+| HIL PC-app tests (milestone 5; asks the 10X password) | `pc\.venv\Scripts\python test/hil/hil_m5_pc.py --mac 7c:df:a1:f2:50:30 --ssid 10X --home 10X` |
 
 Board console over USB: `devlink info|status|restart|recovery|label <text>` and Improv Wi-Fi serial. Test builds add
 the HIL test console (`info`, `restart`, `crash`, `mode ...`, ...).
@@ -43,6 +46,8 @@ in its build directory; never commit an `sdkconfig` in a project folder.
 
 ## Bench board
 - ESP32-S3 rev v0.1, 8 MB quad flash, 2 MB PSRAM, native USB-Serial/JTAG, MAC 7c:df:a1:f2:50:30 (COM22 today; COM numbers can change).
+- Bench Wi-Fi for the board: **10X** (2.4 GHz band), the same network as the PC (10X_Guest is not reachable from
+  this PC). The password is typed into a masked dialog when a test needs it, never stored.
 - No switchable USB power: when a test needs real power cycles, stop and ask the user to unplug/replug, saying how many
   and how fast, and wait for them to confirm. An RTS/esptool reset is not a power cycle.
 
