@@ -88,7 +88,7 @@ typedef struct {
     char version[33];
 } dl_ota_progress_t;
 
-/* OTA upload handler body (dl_ota.c), called by the HTTP layer with auth already checked. */
+/* OTA upload (dl_ota.c), called by the HTTP layer with auth checked. Runs the upload in its own task (async request). */
 struct httpd_req;
 esp_err_t dl_ota_handle(struct httpd_req *req, bool to_recovery, bool force);
 void dl_ota_get_progress(dl_ota_progress_t *p);

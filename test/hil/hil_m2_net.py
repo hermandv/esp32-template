@@ -106,9 +106,27 @@ def n_ota_rejects(b: Board, api: Api) -> None:
         r = api.ota(img)
         err = r.json().get("error") if r.headers.get("content-type", "").startswith("application/json") else r.text
         check(r.status_code >= 400 and err == want, f"{name} -> {want} ({r.status_code} {err})")
-    r = requests.post(api.url + "/ota?target=app", headers={**api.h(), "Content-Length": str(0x300001)},
-                      data=b"", timeout=10)
-    check(r.status_code == 413, f"announced size > slot -> 413 ({r.status_code})")
+    # Announce 3 MB + 1 and send only the first KB (raw request: HTTP libraries won't send a fake Content-Length).
+    # esp_http_server only dispatches a request once body bytes arrive; a client that stalls right after the headers
+    # gets the server's own 408 instead.
+    host = api.url.split("//")[1].split("/")[0]
+    s = socket.create_connection((host.split(":")[0], 80), timeout=15)
+    s.sendall((f"POST /api/v1/ota?target=app HTTP/1.1\r\nHost: {host}\r\nX-Api-Key: {KEY}\r\n"
+               f"X-Device-Id: {api.mac}\r\nContent-Length: {0x300001}\r\n\r\n").encode() + app[:1024])
+    resp = b""
+    try:
+        while b"}" not in resp:  # headers and the JSON body may arrive in separate packets
+            chunk = s.recv(512)
+            if not chunk:
+                break
+            resp += chunk
+    except OSError:
+        pass
+    s.close()
+    resp = resp.decode(errors="replace")
+    # Only the status line is guaranteed: the board does not drain an oversized body, so closing with unread bytes
+    # resets the connection and the JSON body may be lost (the PC app checks sizes before uploading, SPEC §7.2).
+    check(resp.startswith("HTTP/1.1 413"), f"announced size > slot -> 413 ({resp[:40]!r})")
     check(slots(api) == before, "slots unchanged")
 
 

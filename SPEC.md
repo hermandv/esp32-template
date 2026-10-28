@@ -490,6 +490,18 @@ not stored. Until the release script exists, recovery is built with the HIL test
    ready for a new attempt without a reboot.
 6. `esp_ota_end` (SHA-256 check) → set boot partition → reply `200` with the new version → reboot after 500 ms.
 
+Implementation notes (milestone 2, found on the bench):
+- The upload runs in its **own task** (esp_http_server async request), not in the HTTP server task. The server task is
+  single-threaded: with the upload inside it, a second upload simply waited and then succeeded (no 409, test 10), and
+  in recovery a long upload starved the HTTP heartbeat, so the health task would let the RTC WDT reset the board
+  mid-update. Concurrent uploads are answered 409 by a small reject task.
+- Rejections after the header **drain the rest of the body** before replying (bounded by the largest slot and the
+  10 s idle timeout): closing while the client still sends makes its TCP stack reset the connection and the error
+  reply is lost. A `Content-Length` larger than the slot is answered `413` at once without draining; then only the
+  status line is guaranteed to reach the client.
+- esp_http_server only dispatches a request once body bytes arrive; a client that stalls right after the headers gets
+  the server's own `408`.
+
 ### 7.2 PC side
 - Re-checks the file before upload (same rules, shows project/version/date/chip).
 - Uploads by MAC (rediscovers the current IP first), sends `X-Device-Id`.

@@ -29,6 +29,7 @@ The design lives in `SPEC.md` (v0.6). Read it before changing anything; it is th
 | HIL tests, automatic | `python test/hil/hil_m1.py --mac 7c:df:a1:f2:50:30` |
 | HIL tests needing power cycles | `python test/hil/hil_m1.py --port COM22 m_quick_power_cycles m_power_cycle_in_recovery m_dlcfg_power_cut` |
 | HIL tests, recovery over USB (milestone 2) | `python test/hil/hil_m2.py --mac 7c:df:a1:f2:50:30` |
+| HIL network tests via the board AP (PC offline meanwhile) | `powershell -File test/hil/run_via_ap.ps1 -Mac 7c:df:a1:f2:50:30 -HomeSsid 10X` |
 
 Board console over USB: `devlink info|status|restart|recovery|label <text>` and Improv Wi-Fi serial. Test builds add
 the HIL test console (`info`, `restart`, `crash`, `mode ...`, ...).
