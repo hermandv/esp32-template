@@ -37,12 +37,18 @@ static void flash_program(board_t *b, size_t off, const uint8_t *data, size_t le
 
 /* One reset through the bootloader. @p torn_mask: bits of the new record that do NOT get programmed
  * (simulated power loss during the write); 0 = clean write. */
-static dl_boot_decision_t board_boot_ex(board_t *b, bool deep_sleep, bool req, bool gpio, uint8_t torn_mask)
+static dl_boot_decision_t board_boot_ex(board_t *b, bool deep_sleep, bool host, bool req, bool gpio,
+                                        uint8_t torn_mask)
 {
     dl_bootlog_scan_t scan;
     dl_bootlog_scan(b->flash, SEC, &scan);
-    dl_boot_inputs_t in = {.deep_sleep_wake = deep_sleep, .req_recovery = req, .gpio_recovery = gpio, .log = &scan};
+    dl_boot_inputs_t in = {.deep_sleep_wake = deep_sleep, .host_reset = host, .req_recovery = req,
+                           .gpio_recovery = gpio, .log = &scan};
     dl_boot_decision_t d = dl_boot_decide(&in);
+    if (d.clean_prev) {
+        uint8_t v = (uint8_t)~DL_REC_CLEAN_RESTART;
+        flash_program(b, scan.end - 1u, &v, 1);
+    }
     if (d.append) {
         dl_bootlog_append_t plan;
         dl_bootlog_plan_append(&scan, SEC, d.record, &plan);
@@ -64,7 +70,7 @@ static dl_boot_decision_t board_boot_ex(board_t *b, bool deep_sleep, bool req, b
 
 static dl_boot_decision_t board_boot(board_t *b)
 {
-    return board_boot_ex(b, false, false, false, 0);
+    return board_boot_ex(b, false, false, false, false, 0);
 }
 
 /* The running image marks its own (newest) record. */
@@ -326,6 +332,56 @@ static void decide_torn_records_count_as_unconfirmed(void)
     UT_EQ(decide_with(r, sizeof(r), false, false, false).reason, DL_BOOT_REASON_QUICK_RESET);
 }
 
+static dl_boot_decision_t decide_host(const uint8_t *recs, size_t n)
+{
+    uint8_t sector[64];
+    memset(sector, 0xFF, sizeof(sector));
+    memcpy(sector, recs, n);
+    dl_bootlog_scan_t scan;
+    dl_bootlog_scan(sector, sizeof(sector), &scan);
+    dl_boot_inputs_t in = {.host_reset = true, .log = &scan};
+    return dl_boot_decide(&in);
+}
+
+static void decide_host_reset_cleans_interrupted_boot(void)
+{
+    /* Would be quick_reset (3 quick) and crash_loop (5 unconfirmed) without the host reset. */
+    const uint8_t r[] = {R_APP_ALIVE, R_APP_ALIVE, R_APP_QUICK, R_APP_QUICK, R_APP_QUICK};
+    dl_boot_decision_t d = decide_host(r, sizeof(r));
+    UT_EQ(d.target, DL_BOOT_TARGET_STANDARD);
+    UT_EQ(d.reason, DL_BOOT_REASON_NORMAL);
+    UT_CHECK(d.clean_prev);
+}
+
+static void decide_host_reset_only_cleans_newest(void)
+{
+    /* 6 unconfirmed boots, the newest interrupted by the host: only that one is cleaned, which breaks the chain
+     * (the next crash loop has to start counting again). */
+    const uint8_t r[] = {R_APP_ALIVE, R_APP_ALIVE, R_APP_ALIVE, R_APP_ALIVE, R_APP_ALIVE, R_APP_ALIVE};
+    dl_boot_decision_t d = decide_host(r, sizeof(r));
+    UT_EQ(d.target, DL_BOOT_TARGET_STANDARD);
+    UT_CHECK(d.clean_prev);
+}
+
+static void decide_host_reset_no_write_when_not_needed(void)
+{
+    UT_CHECK(!decide_host(NULL, 0).clean_prev);
+    const uint8_t r[] = {R_APP_CLEANQ};
+    UT_CHECK(!decide_host(r, sizeof(r)).clean_prev);
+}
+
+static void decide_host_reset_keeps_request(void)
+{
+    const uint8_t r[] = {R_APP_STABLE};
+    uint8_t sector[16];
+    memset(sector, 0xFF, sizeof(sector));
+    memcpy(sector, r, sizeof(r));
+    dl_bootlog_scan_t scan;
+    dl_bootlog_scan(sector, sizeof(sector), &scan);
+    dl_boot_inputs_t in = {.host_reset = true, .req_recovery = true, .log = &scan};
+    UT_EQ(dl_boot_decide(&in).reason, DL_BOOT_REASON_REQUESTED);
+}
+
 static void decide_reason_names(void)
 {
     UT_CHECK(strcmp(dl_boot_reason_name(DL_BOOT_REASON_QUICK_RESET), "quick_reset") == 0);
@@ -383,7 +439,7 @@ static void scenario_t13a_deep_sleep_for_an_hour(void)
     board_init(&b);
     board_cycle(&b, 1000, false); /* app goes to sleep after 1 s */
     for (int i = 0; i < 360; i++) { /* 10 s wake-ups for 1 h, each awake < 5 s */
-        dl_boot_decision_t d = board_boot_ex(&b, true, false, false, 0);
+        dl_boot_decision_t d = board_boot_ex(&b, true, false, false, false, 0);
         UT_EQ(d.target, DL_BOOT_TARGET_STANDARD);
     }
     UT_EQ(b.boots_factory, 0);
@@ -408,7 +464,7 @@ static void scenario_t13c_torn_record_in_good_run(void)
         for (int i = 0; i < 10; i++) {
             board_cycle(&b, 200000, false);
         }
-        board_boot_ex(&b, false, false, false, (uint8_t)mask); /* torn, then power is gone */
+        board_boot_ex(&b, false, false, false, false, (uint8_t)mask); /* torn, then power is gone */
         for (int i = 0; i < 10; i++) {
             board_cycle(&b, 200000, false);
         }
@@ -429,7 +485,7 @@ static void scenario_t13c_torn_records_crash_loop_still_caught(void)
         dl_boot_decision_t d = {0};
         int n = 0;
         while (n < 10) {
-            d = board_boot_ex(&b, false, false, false, (uint8_t)mask);
+            d = board_boot_ex(&b, false, false, false, false, (uint8_t)mask);
             n++;
             if (d.target == DL_BOOT_TARGET_FACTORY) {
                 break;
@@ -495,6 +551,46 @@ static void scenario_t20_recovery_crashes_falls_back_to_app(void)
     UT_EQ(board_cycle(&b, 200000, false).target, DL_BOOT_TARGET_STANDARD);
 }
 
+static void scenario_repeated_flashing_never_recovers(void)
+{
+    /* Developer flashes 50 times; each new image runs 1-30 s before the next esptool reset. */
+    board_t b;
+    board_init(&b);
+    for (int i = 0; i < 50; i++) {
+        board_boot_ex(&b, false, true, false, false, 0);
+        board_run(&b, (unsigned)((i % 4) * 9000 + 1000), false);
+    }
+    UT_EQ(b.boots_factory, 0);
+}
+
+static void scenario_flash_then_crash_loop_still_caught(void)
+{
+    /* A freshly flashed app that crash-loops (panic resets, not host resets) still ends in recovery. */
+    board_t b;
+    board_init(&b);
+    board_boot_ex(&b, false, true, false, false, 0); /* flashed */
+    board_run(&b, 40000, false);
+    int n = 0;
+    dl_boot_decision_t d;
+    do {
+        d = board_cycle(&b, 40000, false);
+        n++;
+    } while (d.target != DL_BOOT_TARGET_FACTORY && n < 20);
+    UT_EQ(d.reason, DL_BOOT_REASON_CRASH_LOOP);
+    UT_EQ(n, 5); /* the flashed boot crashed too: 5 crashing boots, 6th (5th here) goes to recovery */
+}
+
+static void scenario_power_cycles_still_escape_after_flashing(void)
+{
+    board_t b;
+    board_init(&b);
+    board_boot_ex(&b, false, true, false, false, 0); /* flashed a hostile app */
+    board_run(&b, 1000, false);
+    board_cycle(&b, 1000, false); /* power cycles */
+    board_cycle(&b, 1000, false);
+    UT_EQ(board_boot(&b).reason, DL_BOOT_REASON_QUICK_RESET);
+}
+
 /* ------------------------------------------------------------------------------------------------ */
 /* Retained RTC block                                                                               */
 /* ------------------------------------------------------------------------------------------------ */
@@ -547,6 +643,10 @@ int main(void)
     UT_RUN(decide_request_beats_recovery_loop);
     UT_RUN(decide_gpio);
     UT_RUN(decide_torn_records_count_as_unconfirmed);
+    UT_RUN(decide_host_reset_cleans_interrupted_boot);
+    UT_RUN(decide_host_reset_only_cleans_newest);
+    UT_RUN(decide_host_reset_no_write_when_not_needed);
+    UT_RUN(decide_host_reset_keeps_request);
     UT_RUN(decide_reason_names);
 
     UT_RUN(scenario_good_app_never_recovers_across_rollovers);
@@ -559,6 +659,9 @@ int main(void)
     UT_RUN(scenario_t13c_rollover_keeps_history);
     UT_RUN(scenario_t13c_power_loss_after_rollover_erase);
     UT_RUN(scenario_t20_recovery_crashes_falls_back_to_app);
+    UT_RUN(scenario_repeated_flashing_never_recovers);
+    UT_RUN(scenario_flash_then_crash_loop_still_caught);
+    UT_RUN(scenario_power_cycles_still_escape_after_flashing);
 
     UT_RUN(rtc_crc32_known_value);
     UT_RUN(rtc_garbage_is_invalid);

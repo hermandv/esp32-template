@@ -13,7 +13,8 @@ reset-button presses count like power cycles; USB Wi-Fi setup uses the **Improv 
 Changes in v0.5 (milestone 1 implementation): **recovery-loop check now also suppresses the quick-reset escape**
 (a recovery that crashed before 5 s re-entered itself forever); records with `CLEAN_RESTART` don't count as quick
 resets (test 13b); boot reasons `recovery_loop` and `deep_sleep` added; recovery marks its own record `RECOVERY`;
-retained-RTC block and `dlcfg` record layouts fixed (§3.4, §5.3); bootloader flash mode DIO; ESP-IDF v6.0.3 pinned.
+retained-RTC block and `dlcfg` record layouts fixed (§3.4, §5.3); bootloader flash mode DIO; ESP-IDF v6.0.3 pinned;
+a chip reset by the PC over USB (esptool / `idf.py flash`) counts as a planned restart (devlink bootloader v2).
 
 ---
 
@@ -123,9 +124,12 @@ loop interrupted by power cycles is still caught.
   carry-over leaves an empty log: the guards only start counting again (never a wrong recovery).
 - The running image finds its own record as the last non-`0xFF` byte and marks it (`ALIVE_5S` at 5 s, `STABLE` at
   120 s once valid, `CLEAN_RESTART` in `devlink_restart()`).
-- Note for development: an esptool/`idf.py flash` reset interrupts the running boot, which stays unconfirmed. Five
-  flashes in a row within 2 minutes each therefore end in recovery (crash-loop guard). A planned restart
-  (`devlink_restart()`) in between clears the chain.
+- **Host resets are planned restarts.** When the reset reason is a chip reset by the PC over USB-Serial/JTAG
+  (`RESET_REASON_CORE_USB_UART` from esptool/`idf.py` DTR/RTS, or `RESET_REASON_CORE_USB_JTAG`), the bootloader sets
+  `CLEAN_RESTART` in the interrupted boot's record before deciding. Repeated flashing during development therefore
+  never trips the quick-reset escape or the crash-loop guard. Power-on and the EN button report a power-on reset,
+  so they still count as quick resets (I2 unchanged); crashes and watchdog resets have their own reset reasons and
+  still count towards the crash-loop guard.
 
 #### Decision order, on every reset
 
@@ -631,9 +635,6 @@ Grouped by invariant. All run on the oldest bootloader in use.
 
 - Flash size of the boards in use (8 MB vs 4 MB layout)? Any octal-flash modules? *(Bench board 1: ESP32-S3 rev
   v0.1, 8 MB quad flash, 2 MB embedded PSRAM → 8 MB layout. Other boards still open.)*
-- Should a host-initiated chip reset (esptool / `idf.py flash`, reset reason USB-Serial/JTAG) count as a planned
-  restart, so repeated flashing during development never trips the crash-loop guard? (Bootloader change: decide
-  before boards are frozen.)
 - Do the boards have a spare non-strapping pin for a recovery button/jumper (optional §3.4 rule 4)?
 - Bench network: same subnet as the PC, mDNS/broadcast allowed, no client isolation, 2.4 GHz WPA2/WPA3-Personal?
 - Are the boot-log thresholds right for your bench: 3 resets within ~5 s → recovery; 5 boots that never reach 120 s → recovery?

@@ -10,7 +10,7 @@ extern "C" {
 #endif
 
 /** devlink bootloader version, reported by /info. Bump on every change (bootloader is frozen per board). */
-#define DEVLINK_BOOT_VERSION 1
+#define DEVLINK_BOOT_VERSION 2
 
 /**
  * @brief Read the boot log and retained RTC, apply the decision rules, append this boot's record, pass the boot

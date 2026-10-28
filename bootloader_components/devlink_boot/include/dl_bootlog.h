@@ -125,6 +125,7 @@ typedef enum {
 
 typedef struct {
     bool deep_sleep_wake;        /* reset reason is a deep-sleep wake-up */
+    bool host_reset;             /* chip reset requested by the PC over USB (esptool, idf.py flash/monitor) */
     bool req_recovery;           /* valid one-shot REQ_RECOVERY flag in retained RTC */
     bool gpio_recovery;          /* recovery GPIO configured and held low */
     const dl_bootlog_scan_t *log;
@@ -135,10 +136,14 @@ typedef struct {
     dl_boot_reason_t reason;     /* NORMAL may still become ROLLBACK / NO_VALID_APP in the IDF selection */
     bool append;                 /* append a record for this boot */
     uint8_t record;              /* record value to append */
+    bool clean_prev;             /* first set CLEAN_RESTART in the newest existing record (host reset) */
 } dl_boot_decision_t;
 
 /**
  * @brief Decide where to boot (SPEC §3.4 decision order). Uses the records written BEFORE this boot.
+ *        A host reset (PC over USB) counts as a planned restart of the interrupted boot: its record is treated as
+ *        CLEAN_RESTART (and d.clean_prev asks the caller to write that bit), so repeated flashing never trips the
+ *        guards. Power-on and EN-button resets are not host resets.
  *
  * @requirement SPEC-3.4-DECISION
  * @parent      I1, I2

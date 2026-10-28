@@ -135,7 +135,10 @@ int devlink_boot_select(bootloader_state_t *bs)
     /* Inputs. Read our RTC block before anything below may reset the retain area. */
     memcpy(&rtc, mem->custom, sizeof(rtc));
     bool req = dl_rtc_valid(&rtc) && (rtc.req == DL_RTC_REQ_RECOVERY);
-    bool deep_sleep = (esp_rom_get_reset_reason(0) == RESET_REASON_CORE_DEEP_SLEEP);
+    soc_reset_reason_t rst = esp_rom_get_reset_reason(0);
+    bool deep_sleep = (rst == RESET_REASON_CORE_DEEP_SLEEP);
+    /* Reset by the PC over USB-Serial/JTAG (esptool / idf.py DTR-RTS, or JTAG): a planned restart. */
+    bool host_reset = (rst == RESET_REASON_CORE_USB_UART) || (rst == RESET_REASON_CORE_USB_JTAG);
     bool have_log = find_dlboot(&log);
 
     if (have_log) {
@@ -153,12 +156,19 @@ int devlink_boot_select(bootloader_state_t *bs)
 
     dl_boot_inputs_t in = {
         .deep_sleep_wake = deep_sleep,
+        .host_reset = host_reset,
         .req_recovery = req,
         .gpio_recovery = recovery_gpio_held(),
         .log = &scan,
     };
     dl_boot_decision_t d = dl_boot_decide(&in);
 
+    if (have_log && d.clean_prev && (scan.end > 0u)) {
+        uint8_t clean = (uint8_t)~DL_REC_CLEAN_RESTART;
+        if (program_bytes(log.offset + (uint32_t)(scan.end - 1u), &clean, 1) != ESP_OK) {
+            ESP_LOGE(TAG, "boot log clean mark failed");
+        }
+    }
     if (have_log && d.append) {
         append_record(&log, &scan, d.record);
     }
@@ -190,8 +200,8 @@ int devlink_boot_select(bootloader_state_t *bs)
     dl_rtc_seal(&rtc);
     memcpy(mem->custom, &rtc, sizeof(rtc));
 
-    ESP_LOGI(TAG, "boot v%d: reason=%s records=%u%s -> index %d (0x%x)", DEVLINK_BOOT_VERSION,
-             dl_boot_reason_name(reason), (unsigned)scan.count, req ? " req" : "", index,
-             (unsigned)rtc.start_offset);
+    ESP_LOGI(TAG, "boot v%d: reason=%s records=%u%s%s -> index %d (0x%x)", DEVLINK_BOOT_VERSION,
+             dl_boot_reason_name(reason), (unsigned)scan.count, req ? " req" : "", d.clean_prev ? " host" : "",
+             index, (unsigned)rtc.start_offset);
     return index;
 }

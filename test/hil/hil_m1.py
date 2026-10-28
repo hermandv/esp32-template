@@ -395,7 +395,21 @@ def m_dlcfg_power_cut(b: Board, cuts: int = 5) -> None:
     b.checkpoint()
 
 
-AUTO = [t_boot_info, t_dlcfg_persists, t_request_recovery, t_quick_reset_by_crashes, t_torn_records,
+def t_host_resets(b: Board, count: int = 8) -> None:
+    """Development flashing: repeated esptool resets (each < 5 s after boot) never enter recovery."""
+    b.ensure_app_normal()
+    for i in range(count):
+        b.esptool("chip-id")  # download mode, then hard reset by the PC (reset reason USB_UART_CHIP_RESET)
+        info = b.wait_boot()
+        if info["image"] != "bootlab" or info["reason"] != "normal":
+            raise Fail(f"esptool reset {i + 1}: {info}")
+    check(True, f"{count} esptool resets in a row, all normal app boots")
+    prev = int(info["recent"].split(",")[1], 16)
+    check(prev & 0x10 == 0, f"interrupted boot marked CLEAN_RESTART by the bootloader (prev record {prev:02X})")
+    b.checkpoint()
+
+
+AUTO = [t_boot_info, t_host_resets, t_dlcfg_persists, t_request_recovery, t_quick_reset_by_crashes, t_torn_records,
         t_crash_loop, t_deep_sleep, t_bootlog_rollover, t_slot_corrupt, t_slots_erased, t_recovery_crashes,
         t_planned_restarts]
 MANUAL = [m_quick_power_cycles, m_power_cycle_in_recovery, m_dlcfg_power_cut]

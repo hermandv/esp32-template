@@ -93,7 +93,9 @@ dl_boot_decision_t dl_boot_decide(const dl_boot_inputs_t *in)
         .reason = DL_BOOT_REASON_NORMAL,
         .append = true,
         .record = DL_REC_NEW_APP,
+        .clean_prev = false,
     };
+    dl_bootlog_scan_t host_log;
     const dl_bootlog_scan_t *log = in->log;
 
     /* Deep-sleep wake-ups are not logged and never trigger recovery (SPEC §3.4, test 13a). */
@@ -101,6 +103,14 @@ dl_boot_decision_t dl_boot_decide(const dl_boot_inputs_t *in)
         d.reason = DL_BOOT_REASON_DEEP_SLEEP;
         d.append = false;
         return d;
+    }
+
+    /* Host reset: the interrupted boot ended in a planned restart (SPEC §3.4, development flashing). */
+    if (in->host_reset && (log->n_recent > 0u) && !dl_rec_has(log->recent[0], DL_REC_CLEAN_RESTART)) {
+        host_log = *log;
+        host_log.recent[0] = (uint8_t)(host_log.recent[0] & ~DL_REC_CLEAN_RESTART);
+        log = &host_log;
+        d.clean_prev = true;
     }
 
     /* Recovery itself is crash-looping: rules 2 and 3 must not send us back there (otherwise a recovery that
