@@ -1,6 +1,6 @@
 # ESP32-S3 Bench Template (devlink)
 
-The design lives in `SPEC.md` (v0.7). Read it before changing anything; it is the source of truth.
+The design lives in `SPEC.md` (v0.8). Read it before changing anything; it is the source of truth.
 `SPEC_v0.2.md` is an old version kept for reference only.
 
 ## Ground rules
@@ -33,6 +33,7 @@ The design lives in `SPEC.md` (v0.7). Read it before changing anything; it is th
 | HIL tests, recovery over USB (milestone 2) | `python test/hil/hil_m2.py --mac 7c:df:a1:f2:50:30` |
 | HIL network tests via the board AP (PC offline meanwhile) | `powershell -File test/hil/run_via_ap.ps1 -Mac 7c:df:a1:f2:50:30 -HomeSsid 10X` |
 | HIL app tests: OTA cycles, rollbacks (milestone 3, via the app AP) | `powershell -File test/hil/run_via_ap.ps1 -Mac 7c:df:a1:f2:50:30 -HomeSsid 10X -Target app -Script hil_m3_net.py` |
+| HIL streaming tests (milestone 4, via the app AP) | `powershell -File test/hil/run_via_ap.ps1 -Mac 7c:df:a1:f2:50:30 -HomeSsid 10X -Target app -Script hil_m4_net.py` |
 
 Board console over USB: `devlink info|status|restart|recovery|label <text>` and Improv Wi-Fi serial. Test builds add
 the HIL test console (`info`, `restart`, `crash`, `mode ...`, ...).

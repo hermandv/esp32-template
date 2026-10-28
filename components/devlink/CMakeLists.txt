@@ -4,6 +4,7 @@ idf_component_register(SRCS "devlink_boot_rt.c" "dlcfg.c" "dlcfg_core.c"
                             "devlink_start.c" "dl_ident.c" "dl_info.c" "dl_wifi.c" "dl_wifi_policy.c"
                             "dl_http.c" "dl_ota.c" "dl_ota_check.c" "dl_json.c" "dl_disc.c" "dl_dns.c"
                             "dl_console.c" "dl_improv.c" "dl_health.c" "dl_web.c" "dl_app.c" "dl_button.c"
+                            "dl_stream.c" "dl_stream_core.c"
                        INCLUDE_DIRS "include"
                        PRIV_INCLUDE_DIRS "."
                        REQUIRES devlink_boot esp_partition esp_netif

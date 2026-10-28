@@ -77,6 +77,18 @@ dl_wifi_src_t dl_wifi_src_for_ip(uint32_t peer_ip);
 /* ---- HTTP / OTA / discovery / DNS ---- */
 
 esp_err_t dl_http_start(void);
+
+/* ---- Streaming (dl_stream.c) ---- */
+struct httpd_req;
+esp_err_t dl_stream_start(void *server);
+esp_err_t dl_stream_ws_handler(struct httpd_req *req);
+esp_err_t dl_stream_ws_post_handshake(struct httpd_req *req);
+void dl_stream_on_close(int fd);
+void dl_stream_channels_json(dl_jw_t *w);
+uint32_t dl_stream_drops(void);
+uint32_t dl_stream_clients(void);
+bool dl_stream_temperature(float *celsius);
+
 uint32_t dl_http_heartbeat_age_ms(void);
 esp_err_t dl_disc_start(void);
 void dl_disc_update(void);          /* label/mode changed: refresh mDNS TXT */

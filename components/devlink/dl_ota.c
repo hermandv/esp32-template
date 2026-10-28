@@ -108,9 +108,10 @@ static esp_err_t fail(httpd_req_t *req, const char *status, const char *error, e
     }
     s_prog.state = "error";
     s_prog.error = error;
-    ESP_LOGW(TAG, "upload rejected: %s", error);
     drain(req, left, s_buf, sizeof(s_buf));
     unlock();
+    /* Log after unlocking: streaming (and so the log channel) is paused while the OTA lock is held. */
+    ESP_LOGW(TAG, "upload rejected: %s", error);
     (void)reply_error(req, status, error);
     return ESP_FAIL;
 }

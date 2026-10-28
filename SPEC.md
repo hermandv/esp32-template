@@ -1,4 +1,4 @@
-# ESP32-S3 Bench Template – Specification (v0.7 draft)
+# ESP32-S3 Bench Template – Specification (v0.8 draft)
 
 A reusable firmware + PC tool template for bringing up and testing ESP32-S3 hardware boards over Wi-Fi.
 Working name for the shared firmware layer: **devlink**.
@@ -24,6 +24,9 @@ in the IDF bootloader descriptor; recovery RTC WDT 30 s. OTA uploads run in thei
 
 Changes in v0.7 (milestone 3, devlink in the app): app self-test and rollback implementation fixed (§3.5), button
 implemented (§5.9), `app/` template project added.
+
+Changes in v0.8 (milestone 4, streaming): WebSocket protocol details, batching, rates and slow-client handling fixed
+(§5.7); `devlink_sysmon` and `mod_example` added; `devlink_sleep()` and `devlink_channel_wanted_hz()` in the module API.
 
 ---
 
@@ -416,6 +419,23 @@ Device → PC:
 - `ESP_LOG*` output is tapped into a ring buffer → channel `log`, and still goes to USB serial.
   `devlink_debug(ch, fmt, ...)` publishes to custom debug channels.
 - **All streaming pauses during an OTA** (memory and CPU go to the update).
+
+Implementation (milestone 4, `dl_stream.c`, `dl_stream_core.c`):
+- One WebSocket message may carry **several frames, newline-separated** (one JSON object per line); the PC splits
+  lines. Ops get a reply (`{"op":"sub","ok":[...],"unknown":[...]}`, `{"op":"rate","ch":..,"hz":..}`,
+  `{"op":"error","error":..}`); `{"op":"unsub"}` without `ch` ends all subscriptions; `{"op":"list"}` = `/channels`.
+  A new connection gets `{"op":"hello","api":1}`; a third one gets `too_many_clients` and is closed.
+- Rate per client and channel: `hz` 0 = every value (events, e.g. `log`); a request above `max_hz` is clamped.
+  Samples up to 1/8 period early are accepted, so a producer at exactly the requested rate keeps it.
+- Each client has a fixed ring (32 frames × 256 B). The single sender task only hands a batch to the HTTP server task
+  when the socket is writable: a stalled client never blocks the API (or, in recovery, the health check). Its new
+  frames are dropped and counted (`/status` `drops`); a client that cannot take data for 10 s is closed.
+- Log tap: `esp_log_set_vprintf` hook, Log V1 (one vprintf call per line, pinned in the shared config); never blocks
+  a logging task (lock busy → counted drop); not from ISRs. Logs written while the OTA lock is held are not streamed.
+- In IDF v6 the URI handler is not called for the WebSocket handshake: clients are registered in the post-handshake
+  callback (`CONFIG_HTTPD_WS_POST_HANDSHAKE_CB_SUPPORT`).
+- Recovery has the `log` channel only (no sysmon, §6.1). Producers can check `devlink_channel_wanted_hz()` and skip
+  measuring while nobody listens.
 
 ### 5.8 Module API
 

@@ -39,6 +39,11 @@ TESTS = {
         [DEVLINK / "dl_improv.c"],
         [DEVLINK / "include"],
     ),
+    "stream": (
+        "test/host/test_stream.c",
+        [DEVLINK / "dl_stream_core.c", DEVLINK / "dl_json.c"],
+        [DEVLINK / "include"],
+    ),
     "button": (
         "test/host/test_button.c",
         [DEVLINK / "dl_button.c"],
@@ -63,7 +68,7 @@ def run(name: str) -> bool:
     BUILD.mkdir(parents=True, exist_ok=True)
     exe = BUILD / f"test_{name}.exe"
     cmd = ["gcc", *CFLAGS, *[f"-I{i}" for i in incs], f"-I{ROOT / 'test' / 'host'}",
-           str(test_path), *map(str, srcs), "-o", str(exe)]
+           str(test_path), *map(str, srcs), "-o", str(exe), "-lm"]
     print(f"== {name}: build")
     if subprocess.run(cmd).returncode != 0:
         return False

@@ -426,10 +426,7 @@ static esp_err_t h_coredump_delete(httpd_req_t *req)
 
 static esp_err_t h_channels(httpd_req_t *req)
 {
-    /* Streaming arrives in milestone 4; the log channel is listed so the PC app knows what recovery offers. */
-    return send_json(req, "200 OK",
-                     "{\"channels\":[{\"name\":\"log\",\"unit\":\"\",\"type\":\"object\",\"default_hz\":0,"
-                     "\"max_hz\":0}],\"streaming\":false}");
+    return send_builder(req, dl_stream_channels_json);
 }
 
 static esp_err_t h_root(httpd_req_t *req)
@@ -449,6 +446,14 @@ static esp_err_t h_404(httpd_req_t *req, httpd_err_code_t err)
         return httpd_resp_send(req, NULL, 0);
     }
     return send_error(req, "404 Not Found", "not_found");
+}
+
+/* Socket closed (client gone, LRU purge, error): drop its stream subscription, then close it. */
+static void on_close(httpd_handle_t hd, int fd)
+{
+    (void)hd;
+    dl_stream_on_close(fd);
+    (void)close(fd);
 }
 
 static void heartbeat_work(void *arg)
@@ -483,6 +488,8 @@ esp_err_t dl_http_start(void)
         {.uri = "/api/v1/coredump", .method = HTTP_GET, .handler = h_coredump_get},
         {.uri = "/api/v1/coredump", .method = HTTP_DELETE, .handler = h_coredump_delete},
         {.uri = "/api/v1/channels", .method = HTTP_GET, .handler = h_channels},
+        {.uri = "/ws", .method = HTTP_GET, .handler = dl_stream_ws_handler, .is_websocket = true,
+         .ws_post_handshake_cb = dl_stream_ws_post_handshake},
     };
     httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();
     cfg.max_uri_handlers = sizeof(uris) / sizeof(uris[0]) + 2u;
@@ -490,6 +497,8 @@ esp_err_t dl_http_start(void)
     cfg.recv_wait_timeout = 10; /* OTA idle timeout (SPEC §7.1 step 5) */
     cfg.send_wait_timeout = 10;
     cfg.lru_purge_enable = true;
+    cfg.max_open_sockets = 8; /* HTTP + up to 2 WebSocket clients + an OTA (SPEC 5.7) */
+    cfg.close_fn = on_close;
     esp_err_t err = httpd_start(&s_server, &cfg);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "httpd_start: %s", esp_err_to_name(err));
@@ -499,6 +508,7 @@ esp_err_t dl_http_start(void)
         ESP_ERROR_CHECK(httpd_register_uri_handler(s_server, &uris[i]));
     }
     ESP_ERROR_CHECK(httpd_register_err_handler(s_server, HTTPD_404_NOT_FOUND, h_404));
+    ESP_ERROR_CHECK(dl_stream_start(s_server));
     s_heartbeat_us = esp_timer_get_time();
     return ESP_OK;
 }

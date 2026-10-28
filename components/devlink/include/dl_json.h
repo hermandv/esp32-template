@@ -36,6 +36,13 @@ bool dl_json_valid_object(const char *json, size_t len);
  */
 dl_json_err_t dl_json_get_str(const char *json, size_t len, const char *key, char *out, size_t out_size);
 
+/**
+ * @brief Get element @p index of a top-level array of strings ({"ch":["a","b"]}). A plain string value counts as
+ *        a one-element array. DL_JSON_MISSING when the index is past the end.
+ */
+dl_json_err_t dl_json_get_str_at(const char *json, size_t len, const char *key, size_t index, char *out,
+                                 size_t out_size);
+
 /** Get an integer value (no fraction/exponent). */
 dl_json_err_t dl_json_get_int(const char *json, size_t len, const char *key, long *out);
 

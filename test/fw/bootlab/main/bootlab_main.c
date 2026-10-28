@@ -18,7 +18,9 @@
 #include <string.h>
 
 #include "devlink.h"
+#include "devlink_sysmon.h"
 #include "devlink_testcon.h"
+#include "mod_example.h"
 #include "esp_attr.h"
 #include "esp_sleep.h"
 #include <inttypes.h>
@@ -126,6 +128,8 @@ void app_main(void)
     }
 
     devlink_start(DEVLINK_MODE_APP); /* Wi-Fi, API; the self-test marks this app valid */
+    devlink_sysmon_start();
+    mod_example_start();
     vTaskDelay(pdMS_TO_TICKS(2000));
 
     unsigned crash_s = mode_arg("crash:");

@@ -249,9 +249,25 @@ def t_torn_records(b: Board) -> None:
     b.checkpoint()
 
 
+def only_ota0(b: Board) -> None:
+    """Known slot state for the slot tests: the app in ota_0, ota_1 empty, otadata selecting ota_0 (as after
+    flash_all.py; earlier OTA tests may have left the app in ota_1)."""
+    time.sleep(6)
+    with tempfile.TemporaryDirectory() as tmp:
+        od = Path(tmp) / "otadata.bin"
+        od.write_bytes(dl.otadata_image(0))
+        b.esptool("erase-region", hex(OTA1), hex(SLOT_SIZE), reset=False)
+        b.esptool("write-flash", "--flash-mode", "dio", "--flash-size", "8MB", "0xf000", str(od),
+                  hex(OTA0), str(BUILD / "bootlab" / "bootlab.bin"))
+    info = b.wait_boot()
+    check(info["image"] == "bootlab" and info["running"] == hex(OTA0), "known state: app in ota_0")
+    b.checkpoint()
+
+
 def t_slot_corrupt(b: Board) -> None:
     """Test 18: one corrupted byte in the active slot -> the loader falls back (here: to recovery)."""
     b.ensure_app_normal()
+    only_ota0(b)
     time.sleep(6)  # ALIVE_5S, so the boot interrupted by esptool is not a quick one
     with tempfile.TemporaryDirectory() as tmp:
         sec = Path(tmp) / "sector.bin"
@@ -279,11 +295,8 @@ def t_slots_erased(b: Board) -> None:
     b.esptool("erase-region", hex(OTA1), hex(SLOT_SIZE))
     info = b.wait_boot()
     check(info["image"] == "recovery" and info["reason"] == "no_valid_app", "no app -> recovery, no_valid_app")
-    time.sleep(6)
-    b.write(OTA0, BUILD / "bootlab" / "bootlab.bin")
-    info = b.wait_boot()
-    check(info["image"] == "bootlab", "app written back -> app boots")
-    b.checkpoint()
+    only_ota0(b)  # app written back (and otadata pointing at it)
+    check(True, "app written back -> app boots")
 
 
 def t_recovery_crashes(b: Board) -> None:

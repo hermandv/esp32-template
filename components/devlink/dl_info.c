@@ -318,10 +318,16 @@ void dl_status_json(dl_jw_t *w)
     dl_jw_kv_int(w, "tx_power_dbm", st.tx_power_dbm);
     dl_jw_kv_uint(w, "stack_restarts", st.stack_restarts);
     dl_jw_raw(w, "}");
+    float temp;
     dl_jw_key(w, "temp");
-    dl_jw_raw(w, "null"); /* sys.temp: app only (devlink_sysmon) */
+    if (dl_stream_temperature(&temp)) {
+        dl_jw_rawf(w, "%.1f", (double)temp);
+    } else {
+        dl_jw_raw(w, "null"); /* app with devlink_sysmon only */
+    }
     dl_jw_kv_uint(w, "unconfirmed_boots", unconfirmed_in_a_row());
-    dl_jw_kv_uint(w, "drops", 0);
+    dl_jw_kv_uint(w, "drops", dl_stream_drops());
+    dl_jw_kv_uint(w, "ws_clients", dl_stream_clients());
     dl_jw_key(w, "ota");
     dl_jw_raw(w, "{");
     dl_jw_kv_str(w, "state", ota.state);

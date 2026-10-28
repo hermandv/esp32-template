@@ -3,6 +3,8 @@
  * modules. Copy this project for a new board or IC.
  */
 #include "devlink.h"
+#include "devlink_sysmon.h"
+#include "mod_example.h"
 #include "nvs_flash.h"
 
 void app_main(void)
@@ -22,5 +24,7 @@ void app_main(void)
     devlink_console_start(NULL);
     devlink_start(DEVLINK_MODE_APP);
 
-    /* 4. Test modules start here (milestone 4: stream channels, mod_example). */
+    /* 4. Built-in sys.* channels, then the test modules (copy mod_example for each IC under test). */
+    devlink_sysmon_start();
+    mod_example_start();
 }

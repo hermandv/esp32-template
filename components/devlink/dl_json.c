@@ -318,6 +318,36 @@ dl_json_err_t dl_json_get_str(const char *json, size_t len, const char *key, cha
     return parse_string(&c, out, out_size);
 }
 
+dl_json_err_t dl_json_get_str_at(const char *json, size_t len, const char *key, size_t index, char *out,
+                                 size_t out_size)
+{
+    cur_t c;
+    dl_json_err_t e = find(json, len, key, &c);
+    if (e != DL_JSON_OK) {
+        return e;
+    }
+    if (peek(&c, '"')) {
+        return (index == 0u) ? parse_string(&c, out, out_size) : DL_JSON_MISSING;
+    }
+    if (!peek(&c, '[')) {
+        return DL_JSON_TYPE;
+    }
+    c.pos++;
+    if (peek(&c, ']')) {
+        return DL_JSON_MISSING;
+    }
+    for (size_t i = 0;; i++) {
+        if (i == index) {
+            return peek(&c, '"') ? parse_string(&c, out, out_size) : DL_JSON_TYPE;
+        }
+        (void)skip_value(&c, 1);
+        if (!peek(&c, ',')) {
+            return DL_JSON_MISSING;
+        }
+        c.pos++;
+    }
+}
+
 dl_json_err_t dl_json_get_int(const char *json, size_t len, const char *key, long *out)
 {
     cur_t c;
