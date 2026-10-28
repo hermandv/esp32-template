@@ -85,6 +85,8 @@ class MainWindow(QMainWindow):
 def main() -> int:
     app = QApplication(sys.argv)
     app.setApplicationName("devlink")
+    # Fusion: the same look everywhere (the Windows 11 style draws an accent bar in every selected table cell).
+    app.setStyle("Fusion")
     w = MainWindow()
     w.show()
     return app.exec()
