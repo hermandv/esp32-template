@@ -1,4 +1,4 @@
-# ESP32-S3 Bench Template – Specification (v0.5 draft)
+# ESP32-S3 Bench Template – Specification (v0.6 draft)
 
 A reusable firmware + PC tool template for bringing up and testing ESP32-S3 hardware boards over Wi-Fi.
 Working name for the shared firmware layer: **devlink**.
@@ -15,6 +15,12 @@ Changes in v0.5 (milestone 1 implementation): **recovery-loop check now also sup
 resets (test 13b); boot reasons `recovery_loop` and `deep_sleep` added; recovery marks its own record `RECOVERY`;
 retained-RTC block and `dlcfg` record layouts fixed (§3.4, §5.3); bootloader flash mode DIO; ESP-IDF v6.0.3 pinned;
 a chip reset by the PC over USB (esptool / `idf.py flash`) counts as a planned restart (devlink bootloader v2).
+
+Changes in v0.6 (milestone 2, recovery image): Improv serial implemented in devlink itself (no registry component);
+console lines `devlink info|status|restart` added; no JSON library (small flat-object reader, §5.6); API details
+fixed (wrong `X-Device-Id` → 409, `factory-reset` option `nvs`, `/channels` lists `log` until streaming arrives);
+dlcfg field `sta_retry_s` renamed `button_window_s` (same position, defaults 20 s / 120 s); bootloader version also
+in the IDF bootloader descriptor; recovery RTC WDT 30 s.
 
 ---
 
@@ -329,18 +335,21 @@ retries every 15 s with back-off to 60 s.
 - SSID `ESP32S3-CFG-<id>` (app) / `ESP32S3-REC-<id>` (recovery). WPA2, password from the shared config
   (default `configure`), identical in app and recovery.
 - IP 192.168.4.1, DHCP, captive-portal DNS redirect for browsers; the JSON API works without it.
-- Tiny web page: scan list, SSID/password, friendly name, Save. Same JSON API as §5.6.
+- Tiny web page: scan list, SSID/password, friendly name, Save. Same JSON API as §5.6. The page carries the build-time
+  API key (not a secret on a bench network, §1).
+- Captive DNS answers only clients on the AP subnet (192.168.4.0/24); unknown paths from AP clients redirect to `/`.
 
 **USB provisioning – Improv serial** (app and recovery)
-- Wi-Fi over USB uses the open **Improv Wi-Fi serial** protocol (ESP-IDF component from the registry), on the native
-  USB-Serial-JTAG port, alongside normal log output.
+- Wi-Fi over USB uses the open **Improv Wi-Fi serial** protocol (v1), implemented in devlink (`dl_improv.c`, host-tested;
+  no registry component), on the native USB-Serial-JTAG port, alongside normal log output.
 - Supported Improv commands: current state, device info (firmware name/version, chip, device name = label or id),
   scan networks, send Wi-Fi settings. After connecting, the device returns its URL (`http://<ip>/`).
 - Works from the PC app (pyserial) and from any browser tool that speaks Improv (e.g. ESP Web Tools), so a board can be
   set up from a laptop without our app.
 - Settings received over Improv are applied with the AP rules (saved directly, §5.4): a wired user is physically present.
-- Improv has no field for the label or recovery, so two plain console lines remain: `devlink label <text>` and
-  `devlink recovery`. Improv frames start with `IMPROV`, so both can share the port.
+- Improv has no field for the label or recovery, so plain console lines remain: `devlink label <text>`,
+  `devlink recovery`, `devlink restart`, and `devlink info` / `devlink status` (answer `devlink info {json}`, same
+  JSON as the API). Improv frames start with `IMPROV`, so both can share the port.
 
 ### 5.5 Discovery
 
@@ -425,6 +434,9 @@ Recovery is the safety net, so it is held to stricter rules than the app.
 ### 6.1 Content
 devlink core only: `dlcfg`, Wi-Fi + provisioning (AP + USB), discovery (`mode=recovery`), API subset (§5.6), `log`
 channel, core dump download. No test modules, no sysmon, no other channels. Target size < 1.2 MB (25 % headroom).
+Milestone 2 build: 0.92 MB. Wi-Fi without NVS (`CONFIG_ESP_WIFI_NVS_ENABLED=n`, `WIFI_STORAGE_RAM`), PHY calibration
+not stored. Until the release script exists, recovery is built with the HIL test console
+(`CONFIG_DEVLINK_TEST_CONSOLE=y`); a release recovery must be built without it.
 
 ### 6.2 Minimal hardware assumptions (I3)
 - **No PSRAM** enabled (works on modules with and without PSRAM, and on a board with a damaged PSRAM).
@@ -440,8 +452,9 @@ channel, core dump download. No test modules, no sysmon, no other channels. Targ
 - No idle timeouts that shut anything down.
 
 ### 6.4 Self-healing
-- RTC WDT stays enabled for the whole recovery run, fed by a health task only while the HTTP server task and Wi-Fi event
-  loop report heartbeats. Task WDT on all tasks.
+- RTC WDT stays enabled for the whole recovery run (30 s), fed every 2 s by a health task only while the HTTP server
+  task (proved by queued work) and the Wi-Fi task report heartbeats (< 15 s old). Task WDT on all tasks (10 s, both
+  idle tasks, panic).
 - Wi-Fi errors → restart the Wi-Fi stack; after 3 failed restarts → `devlink_restart()` (clean restart, not a crash).
 - Marks `ALIVE_5S` / `STABLE` in the boot log like the app does.
 - **Brownout handling**: boards under test often have weak supplies, and Wi-Fi TX peaks cause brownout loops.

@@ -19,8 +19,8 @@ void dlcfg_defaults(dlcfg_t *cfg)
 {
     (void)memset(cfg, 0, sizeof(*cfg));
     cfg->log_level = 3u; /* info */
-    cfg->ap_window_s = 0u;
-    cfg->sta_retry_s = 30u;
+    cfg->ap_window_s = 20u;
+    cfg->button_window_s = 120u;
 }
 
 bool dlcfg_parse(const uint8_t *sector, size_t len, dlcfg_t *cfg, uint32_t *seq)

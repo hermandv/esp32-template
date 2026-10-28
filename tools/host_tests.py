@@ -24,6 +24,26 @@ TESTS = {
         [DEVLINK / "dlcfg_core.c", BOOT / "dl_rtc.c"],
         [DEVLINK / "include", BOOT / "include"],
     ),
+    "json": (
+        "test/host/test_json.c",
+        [DEVLINK / "dl_json.c"],
+        [DEVLINK / "include"],
+    ),
+    "ota_check": (
+        "test/host/test_ota_check.c",
+        [DEVLINK / "dl_ota_check.c"],
+        [DEVLINK / "include", BOOT / "include"],
+    ),
+    "improv": (
+        "test/host/test_improv.c",
+        [DEVLINK / "dl_improv.c"],
+        [DEVLINK / "include"],
+    ),
+    "wifi_policy": (
+        "test/host/test_wifi_policy.c",
+        [DEVLINK / "dl_wifi_policy.c"],
+        [DEVLINK / "include"],
+    ),
 }
 
 CFLAGS = ["-std=c11", "-O1", "-g", "-Wall", "-Wextra", "-Werror", "-Wshadow", "-Wconversion", "-Wno-sign-conversion"]

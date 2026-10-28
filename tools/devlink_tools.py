@@ -6,6 +6,7 @@ so changing COM numbers don't matter.
 
 from __future__ import annotations
 
+import json
 import os
 import re
 import struct
@@ -173,8 +174,73 @@ class Console:
         return parse_kv(m.group(1)) if m else None
 
 
+    def devlink_json(self, what: str = "info", timeout: float = 5.0) -> dict | None:
+        """'devlink info' / 'devlink status' console line -> parsed JSON."""
+        m = self.command(f"devlink {what}", rf"devlink {what} (\{{[^\n]*\}})\r?\n", timeout)
+        return json.loads(m.group(1)) if m else None
+
+    # -- Improv serial (https://www.improv-wifi.com/serial/) --
+    def improv(self, cmd: int, payload: bytes = b"", timeout: float = 5.0, until_empty: bool = False) -> list:
+        """Send an Improv RPC; return the frames received as (type, data) until a result/error arrives
+        (or, with until_empty, until an empty RPC result ends a list such as the scan)."""
+        if self.ser is None:
+            self.open()
+        self.ser.reset_input_buffer()
+        self.ser.write(improv_frame(IMPROV_RPC, bytes([cmd, len(payload)]) + payload))
+        self.ser.flush()
+        frames, raw = [], b""
+        end = time.time() + timeout
+        while time.time() < end:
+            raw += self.ser.read(512)
+            found, raw = improv_parse(raw)
+            for t, d in found:
+                frames.append((t, d))
+                if t == IMPROV_ERROR:
+                    return frames
+                if t == IMPROV_RPC_RESULT and (not until_empty or d[1] == 0):
+                    return frames
+        return frames
+
+
 def parse_kv(text: str) -> dict:
     return dict(kv.split("=", 1) for kv in text.split() if "=" in kv)
+
+
+IMPROV_STATE, IMPROV_ERROR, IMPROV_RPC, IMPROV_RPC_RESULT = 1, 2, 3, 4
+IMPROV_CMD_WIFI, IMPROV_CMD_STATE, IMPROV_CMD_INFO, IMPROV_CMD_SCAN = 1, 2, 3, 4
+
+
+def improv_frame(ftype: int, data: bytes) -> bytes:
+    f = b"IMPROV" + bytes([1, ftype, len(data)]) + data
+    return f + bytes([sum(f) & 0xFF])
+
+
+def improv_parse(buf: bytes) -> tuple[list, bytes]:
+    """Extract complete Improv frames from a byte stream that also carries text; returns (frames, rest)."""
+    frames = []
+    while True:
+        i = buf.find(b"IMPROV")
+        if i < 0:
+            return frames, buf[-5:]
+        if len(buf) < i + 9:
+            return frames, buf[i:]
+        n = buf[i + 8]
+        if len(buf) < i + 10 + n:
+            return frames, buf[i:]
+        f = buf[i:i + 10 + n]
+        if f[6] == 1 and (sum(f[:-1]) & 0xFF) == f[-1]:
+            frames.append((f[7], f[9:9 + n]))
+        buf = buf[i + 10 + n:]
+
+
+def improv_strings(data: bytes) -> list[str]:
+    """Strings of an RPC result: command, total length, then length-prefixed strings."""
+    out, p = [], 2
+    while p < len(data):
+        n = data[p]
+        out.append(data[p + 1:p + 1 + n].decode(errors="replace"))
+        p += 1 + n
+    return out
 
 
 # ---------------------------------------------------------------------------------------------------------------
@@ -198,7 +264,7 @@ DLCFG_SECTOR = 4096
 
 
 def dlcfg_payload(ssid: str = "", password: str = "", label: str = "", log_level: int = 3,
-                  ap_window_s: int = 0, sta_retry_s: int = 30) -> bytes:
+                  ap_window_s: int = 20, button_window_s: int = 120) -> bytes:
     """dlcfg_t format 1 (components/devlink/include/dlcfg_core.h), 272 bytes."""
     def s(v: str, n: int) -> bytes:
         b = v.encode()
@@ -206,10 +272,10 @@ def dlcfg_payload(ssid: str = "", password: str = "", label: str = "", log_level
             raise ValueError(f"'{v}' longer than {n - 1} bytes")
         return b.ljust(n, b"\0")
 
-    # C layout: strings @0..228, log_level @229, ap_window_s @230, sta_retry_s @232, reset_ring_pos @234,
+    # C layout: strings @0..228, log_level @229, ap_window_s @230, button_window_s @232, reset_ring_pos @234,
     # reserved @235..237, padding @238..239, reset_ring[8] @240..271.
     p = s(ssid, 33) + s(password, 65) + s("", 33) + s("", 65) + s(label, 33)
-    p += struct.pack("<BHHB3s2x8I", log_level, ap_window_s, sta_retry_s, 0, b"\0" * 3, *([0] * 8))
+    p += struct.pack("<BHHB3s2x8I", log_level, ap_window_s, button_window_s, 0, b"\0" * 3, *([0] * 8))
     assert len(p) == 272, len(p)
     return p
 

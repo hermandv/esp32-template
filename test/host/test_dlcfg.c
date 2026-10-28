@@ -167,14 +167,14 @@ static void dlcfg_t16_power_loss_at_every_point(void)
 
 static void dlcfg_older_shorter_payload_keeps_defaults(void)
 {
-    /* Simulate a record written by an older format that stopped before sta_retry_s. */
+    /* Simulate a record written by an older format that stopped before button_window_s. */
     uint8_t s[SEC];
     memset(s, 0xFF, SEC);
     dlcfg_t a = cfg_with("x", "short");
     dlcfg_build(&a, 1u, s, SEC);
     dlcfg_header_t h;
     memcpy(&h, s, sizeof(h));
-    h.payload_len = (uint16_t)offsetof(dlcfg_t, sta_retry_s);
+    h.payload_len = (uint16_t)offsetof(dlcfg_t, button_window_s);
     uint32_t st = dl_crc32_update(DL_CRC32_INIT, &h, (uint32_t)offsetof(dlcfg_header_t, crc));
     st = dl_crc32_update(st, s + sizeof(h), h.payload_len);
     h.crc = ~st;
@@ -185,7 +185,7 @@ static void dlcfg_older_shorter_payload_keeps_defaults(void)
     uint32_t seq;
     UT_CHECK(dlcfg_parse(s, SEC, &c, &seq));
     UT_CHECK(strcmp(c.label, "short") == 0);
-    UT_EQ(c.sta_retry_s, 30); /* default */
+    UT_EQ(c.button_window_s, 120); /* default */
 }
 
 static void dlcfg_unterminated_strings_are_cut(void)

@@ -27,6 +27,9 @@ ESP_LOG_ATTR_TAG(TAG, "devlink");
 
 _Static_assert(CONFIG_BOOTLOADER_CUSTOM_RESERVE_RTC_SIZE == sizeof(dl_rtc_t),
                "CONFIG_BOOTLOADER_CUSTOM_RESERVE_RTC_SIZE must equal sizeof(dl_rtc_t)");
+/* The images read the devlink bootloader version from the IDF bootloader descriptor. */
+_Static_assert(CONFIG_BOOTLOADER_PROJECT_VER == DEVLINK_BOOT_VERSION,
+               "CONFIG_BOOTLOADER_PROJECT_VER (tools/sdkconfig.defaults.devlink) must equal DEVLINK_BOOT_VERSION");
 
 /* Find the dlboot partition in the partition table. Returns false if missing. */
 static bool find_dlboot(esp_partition_pos_t *pos)

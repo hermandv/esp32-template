@@ -9,8 +9,6 @@
 #include <string.h>
 
 #include "devlink.h"
-#include "driver/usb_serial_jtag.h"
-#include "driver/usb_serial_jtag_vfs.h"
 #include "esp_app_desc.h"
 #include "esp_log.h"
 #include "esp_partition.h"
@@ -144,28 +142,14 @@ static void handle(char *line)
     fflush(stdout);
 }
 
-static void console_task(void *arg)
+/* Lines the devlink console does not handle itself ("devlink ..." and Improv frames are handled there). */
+static bool on_line(const char *in)
 {
-    (void)arg;
-    char line[96];
-    size_t len = 0;
-
-    for (;;) {
-        int c = fgetc(stdin);
-        if (c == EOF) {
-            vTaskDelay(pdMS_TO_TICKS(10));
-            continue;
-        }
-        if ((c == '\n') || (c == '\r')) {
-            line[len] = '\0';
-            if (len > 0u) {
-                handle(line);
-            }
-            len = 0;
-        } else if (len < sizeof(line) - 1u) {
-            line[len++] = (char)c;
-        }
-    }
+    char line[128];
+    strncpy(line, in, sizeof(line) - 1u);
+    line[sizeof(line) - 1u] = '\0';
+    handle(line);
+    return true;
 }
 
 void devlink_testcon_start(const char *image, devlink_testcon_cmd_fn extra)
@@ -173,12 +157,7 @@ void devlink_testcon_start(const char *image, devlink_testcon_cmd_fn extra)
     s_image = image;
     s_extra = extra;
 
-    usb_serial_jtag_driver_config_t cfg = USB_SERIAL_JTAG_DRIVER_CONFIG_DEFAULT();
-    ESP_ERROR_CHECK(usb_serial_jtag_driver_install(&cfg));
-    usb_serial_jtag_vfs_use_driver();
-    setvbuf(stdin, NULL, _IONBF, 0);
-
-    xTaskCreate(console_task, "dltest", 6144, NULL, 5, NULL);
+    ESP_ERROR_CHECK(devlink_console_start(on_line));
     printf("DLT ready image=%s version=%s\n", image, esp_app_get_description()->version);
     print_info();
     fflush(stdout);

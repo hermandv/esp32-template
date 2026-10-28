@@ -32,6 +32,24 @@ CONFIG_BOOTLOADER_LOG_LEVEL_INFO=y
 # CONFIG_SECURE_BOOT is not set
 # CONFIG_SECURE_FLASH_ENC_ENABLED is not set
 
+# Bootloader version, readable by the images from the bootloader descriptor. Must equal DEVLINK_BOOT_VERSION.
+CONFIG_BOOTLOADER_PROJECT_VER=2
+
 # ---- Protection against test modules (§3.6) ----
 CONFIG_EFUSE_VIRTUAL=y
 CONFIG_SPI_FLASH_DANGEROUS_WRITE_ABORTS=y
+
+# ---- devlink shared settings (§5.1): app and recovery MUST agree ----
+CONFIG_DEVLINK_AP_PASSWORD="configure"
+CONFIG_DEVLINK_API_KEY="devlink-bench"
+CONFIG_DEVLINK_PROJECT_PREFIX=""
+CONFIG_DEVLINK_BOARD="s3-devkit"
+
+# ---- Core dump to flash (§5.6 /coredump) ----
+CONFIG_ESP_COREDUMP_ENABLE_TO_FLASH=y
+CONFIG_ESP_COREDUMP_DATA_FORMAT_ELF=y
+
+# ---- Wi-Fi / HTTP shared ----
+CONFIG_HTTPD_MAX_REQ_HDR_LEN=1024
+CONFIG_HTTPD_MAX_URI_LEN=256
+CONFIG_LWIP_MAX_SOCKETS=16

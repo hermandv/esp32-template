@@ -1,6 +1,6 @@
 # ESP32-S3 Bench Template (devlink)
 
-The design lives in `SPEC.md` (v0.4). Read it before changing anything; it is the source of truth.
+The design lives in `SPEC.md` (v0.6). Read it before changing anything; it is the source of truth.
 `SPEC_v0.2.md` is an old version kept for reference only.
 
 ## Ground rules
@@ -27,7 +27,11 @@ The design lives in `SPEC.md` (v0.4). Read it before changing anything; it is th
 | Crash-test recovery (test 20) | `idf.py -C recovery -B build/recovery_crash -DDEVLINK_EXTRA_DEFAULTS=<repo>/test/fw/recovery_crash.defaults build` |
 | First flash / full re-flash (erases everything) | `python tools/flash_all.py --mac 7c:df:a1:f2:50:30 --label "..."` |
 | HIL tests, automatic | `python test/hil/hil_m1.py --mac 7c:df:a1:f2:50:30` |
-| HIL tests needing power cycles | `python test/hil/hil_m1.py m_quick_power_cycles m_power_cycle_in_recovery m_dlcfg_power_cut` |
+| HIL tests needing power cycles | `python test/hil/hil_m1.py --port COM22 m_quick_power_cycles m_power_cycle_in_recovery m_dlcfg_power_cut` |
+| HIL tests, recovery over USB (milestone 2) | `python test/hil/hil_m2.py --mac 7c:df:a1:f2:50:30` |
+
+Board console over USB: `devlink info|status|restart|recovery|label <text>` and Improv Wi-Fi serial. Test builds add
+the HIL test console (`info`, `restart`, `crash`, `mode ...`, ...).
 
 `python` here is the IDF env's Python (on PATH once the IDF environment is active). Each build keeps its `sdkconfig`
 in its build directory; never commit an `sdkconfig` in a project folder.

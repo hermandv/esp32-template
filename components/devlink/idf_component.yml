@@ -1,0 +1,4 @@
+## IDF Component Manager manifest (devlink core). Pinned versions only; see tools/installed_tools.md.
+dependencies:
+  idf: ">=6.0"
+  espressif/mdns: "==1.14.0"   # SPEC §5.5 discovery

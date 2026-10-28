@@ -74,6 +74,28 @@ void devlink_restart(void) __attribute__((noreturn));
  */
 void devlink_restart_to_recovery(void) __attribute__((noreturn));
 
+/**
+ * @brief Start the network services after devlink_boot_early(): Wi-Fi + config AP, HTTP API, captive DNS,
+ *        discovery; in recovery also the health task that feeds the RTC WDT (SPEC §6.4).
+ *
+ * @requirement SPEC-5.4, SPEC-5.5, SPEC-5.6, SPEC-6
+ * @parent      I2, I3, I6
+ * @test        T1, T4, T15, T24
+ */
+esp_err_t devlink_start(devlink_mode_t mode);
+
+/** Extra console line handler (e.g. the test console); return true if the line was handled. */
+typedef bool (*devlink_console_extra_fn)(const char *line);
+
+/**
+ * @brief USB console: Improv Wi-Fi serial and "devlink label|recovery|restart|info|status" lines (SPEC §5.4).
+ *
+ * @requirement SPEC-5.4-IMPROV
+ * @parent      I6
+ * @test        host:improv_*, T16a
+ */
+esp_err_t devlink_console_start(devlink_console_extra_fn extra);
+
 /** Boot information gathered by devlink_boot_early(). */
 const devlink_boot_info_t *devlink_boot_info(void);
 

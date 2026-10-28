@@ -38,8 +38,8 @@ typedef struct {
     char prev_pass[65];
     char label[33];          /* SPEC §4: max 32 UTF-8 bytes */
     uint8_t log_level;
-    uint16_t ap_window_s;    /* config-window time */
-    uint16_t sta_retry_s;
+    uint16_t ap_window_s;    /* config-window time at boot (0 = off) */
+    uint16_t button_window_s; /* config-window time after a 3 s button press */
     uint8_t reset_ring_pos;  /* next slot in reset_ring */
     uint8_t reserved[3];
     uint32_t reset_ring[DLCFG_RESET_RING]; /* esp_reset_reason_t values, newest at reset_ring_pos - 1 */

@@ -5,6 +5,8 @@
 
 #include "bootloader_common.h"
 #include "devlink.h"
+#include "dl_ota_check.h"
+#include "dl_priv.h"
 #include "dl_rtc.h"
 #include "esp_log.h"
 #include "esp_ota_ops.h"
@@ -22,6 +24,8 @@
 
 static const char *TAG = "devlink";
 
+extern const dl_marker_t devlink_marker; /* dl_ident.c */
+
 static devlink_boot_info_t s_info;
 static const esp_partition_t *s_log;
 static SemaphoreHandle_t s_lock;
@@ -35,7 +39,7 @@ _Static_assert(CONFIG_BOOTLOADER_CUSTOM_RESERVE_RTC_SIZE == sizeof(dl_rtc_t),
 
 /* ---- RTC WDT ---- */
 
-static void rwdt_set(uint32_t ms)
+void dl_rwdt_set(uint32_t ms)
 {
     wdt_hal_context_t ctx = RWDT_HAL_CONTEXT_DEFAULT();
     uint32_t ticks = (uint32_t)((uint64_t)ms * rtc_clk_slow_freq_get_hz() / 1000u);
@@ -47,7 +51,16 @@ static void rwdt_set(uint32_t ms)
     wdt_hal_write_protect_enable(&ctx);
 }
 
-static void rwdt_disable(void)
+void dl_rwdt_feed(void)
+{
+    wdt_hal_context_t ctx = RWDT_HAL_CONTEXT_DEFAULT();
+
+    wdt_hal_write_protect_disable(&ctx);
+    wdt_hal_feed(&ctx);
+    wdt_hal_write_protect_enable(&ctx);
+}
+
+void dl_rwdt_disable(void)
 {
     wdt_hal_context_t ctx = RWDT_HAL_CONTEXT_DEFAULT();
 
@@ -78,24 +91,26 @@ static long find_newest(void)
 
 size_t devlink_bootlog_recent(uint8_t *out, size_t max, size_t *total)
 {
-    static uint8_t sector[DL_BOOTLOG_SECTOR];
+    static uint8_t sector[DL_BOOTLOG_SECTOR]; /* shared: guarded by s_lock */
     size_t n = 0u;
-    size_t count = 0u;
 
-    if ((s_log == NULL) || (esp_partition_read(s_log, 0, sector, sizeof(sector)) != ESP_OK)) {
+    if ((s_log == NULL) || (s_lock == NULL)) {
         return 0u;
     }
-    dl_bootlog_scan_t scan;
-    dl_bootlog_scan(sector, sizeof(sector), &scan);
-    for (size_t i = scan.end; (i > 0u) && (n < max); i--) {
-        if (dl_rec_present(sector[i - 1u])) {
-            out[n++] = sector[i - 1u];
+    xSemaphoreTake(s_lock, portMAX_DELAY);
+    if (esp_partition_read(s_log, 0, sector, sizeof(sector)) == ESP_OK) {
+        dl_bootlog_scan_t scan;
+        dl_bootlog_scan(sector, sizeof(sector), &scan);
+        for (size_t i = scan.end; (i > 0u) && (n < max); i--) {
+            if (dl_rec_present(sector[i - 1u])) {
+                out[n++] = sector[i - 1u];
+            }
+        }
+        if (total != NULL) {
+            *total = scan.count;
         }
     }
-    count = scan.count;
-    if (total != NULL) {
-        *total = count;
-    }
+    xSemaphoreGive(s_lock);
     return n;
 }
 
@@ -146,7 +161,10 @@ static dl_rtc_t *rtc_block(void)
 esp_err_t devlink_boot_early(devlink_mode_t mode)
 {
     /* 1. RTC WDT take-over: the bootloader's 9 s become the verify window (SPEC §3.5 rule 2). */
-    rwdt_set(DEVLINK_VERIFY_WDT_MS);
+    dl_rwdt_set(DEVLINK_VERIFY_WDT_MS);
+
+    /* Every devlink image calls this, so referencing the marker here keeps it in every image (SPEC §7.1). */
+    __asm__ volatile("" : : "r"(&devlink_marker));
 
     s_lock = xSemaphoreCreateMutex();
     memset(&s_info, 0, sizeof(s_info));
@@ -196,10 +214,15 @@ esp_err_t devlink_boot_early(devlink_mode_t mode)
 
     /* 4. Reset reason ring in dlcfg (SPEC §5.2). Not on deep-sleep wakes (flash wear). */
     dlcfg_t cfg;
-    if ((esp_reset_reason() != ESP_RST_DEEPSLEEP) && (dlcfg_load(&cfg) == ESP_OK)) {
+    esp_err_t cfg_err = dlcfg_load(&cfg);
+    if ((esp_reset_reason() != ESP_RST_DEEPSLEEP) && (cfg_err == ESP_OK)) {
         dlcfg_push_reset_reason(&cfg, (uint32_t)esp_reset_reason());
         (void)dlcfg_save(&cfg);
     }
+
+    /* 5. Identity (SPEC §4), for every image, also those that never start the network. */
+    dl_ident_init(mode == DEVLINK_MODE_RECOVERY);
+    dl_ident_set_label(cfg.label);
 
     ESP_LOGI(TAG, "%s: boot reason=%s record=%ld/%u running=0x%" PRIx32,
              (mode == DEVLINK_MODE_APP) ? "app" : "recovery", dl_boot_reason_name(s_info.reason),
@@ -220,7 +243,9 @@ esp_err_t devlink_mark_valid(void)
         }
     }
     if (err == ESP_OK) {
-        rwdt_disable();
+        if (s_info.mode == DEVLINK_MODE_APP) {
+            dl_rwdt_disable(); /* recovery: the health task keeps feeding it (SPEC 6.4) */
+        }
         s_valid = true;
         if (s_stable_due) {
             (void)devlink_bootlog_mark(DL_REC_STABLE);

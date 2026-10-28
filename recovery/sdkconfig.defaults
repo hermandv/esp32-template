@@ -1,6 +1,20 @@
 # Recovery-only settings (shared ones are in tools/sdkconfig.defaults.devlink).
 CONFIG_APP_PROJECT_VER_FROM_CONFIG=y
-CONFIG_APP_PROJECT_VER="0.1.0-m1"
+CONFIG_APP_PROJECT_VER="0.2.0-m2"
 CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
-# Recovery must not depend on PSRAM (SPEC §6.2, I3).
+
+# Recovery must not depend on PSRAM, NVS or app data (SPEC §6.2, I3).
 # CONFIG_SPIRAM is not set
+# CONFIG_ESP_WIFI_NVS_ENABLED is not set
+# CONFIG_ESP_PHY_CALIBRATION_AND_DATA_STORAGE is not set
+
+# Self-healing (SPEC §6.4): task WDT on all tasks, including both idle tasks.
+CONFIG_ESP_TASK_WDT_EN=y
+CONFIG_ESP_TASK_WDT_INIT=y
+CONFIG_ESP_TASK_WDT_PANIC=y
+CONFIG_ESP_TASK_WDT_TIMEOUT_S=10
+CONFIG_ESP_TASK_WDT_CHECK_IDLE_TASK_CPU0=y
+CONFIG_ESP_TASK_WDT_CHECK_IDLE_TASK_CPU1=y
+
+# TEST BUILD: HIL test console commands (fault injection). Turn off for a release recovery.
+CONFIG_DEVLINK_TEST_CONSOLE=y

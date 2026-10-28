@@ -1,0 +1,36 @@
+menu "devlink"
+
+    config DEVLINK_AP_PASSWORD
+        string "Config AP password (WPA2, >= 8 characters; same in app and recovery)"
+        default "configure"
+
+    config DEVLINK_API_KEY
+        string "API key for mutating requests (X-Api-Key; fixed at build time)"
+        default "devlink-bench"
+
+    config DEVLINK_PROJECT_PREFIX
+        string "Required project-name prefix for OTA images (empty = no check; force=1 overrides)"
+        default ""
+
+    config DEVLINK_BOARD
+        string "Board / variant name reported in /info"
+        default "s3-devkit"
+
+    config DEVLINK_TX_POWER_DBM
+        int "Recovery Wi-Fi TX power (dBm; reduced to survive weak supplies, SPEC 6.4)"
+        default 11
+        range 2 20
+
+    config DEVLINK_TX_POWER_BROWNOUT_DBM
+        int "Recovery Wi-Fi TX power after a brownout reset (dBm)"
+        default 8
+        range 2 20
+
+    config DEVLINK_TEST_CONSOLE
+        bool "TEST BUILDS: extra console commands for the HIL tests (fault injection)"
+        default n
+        help
+            Adds the test console (test/fw/components/devlink_testcon) commands to the USB console.
+            Never enable in a release build.
+
+endmenu
