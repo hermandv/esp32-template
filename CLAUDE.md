@@ -1,6 +1,6 @@
 # ESP32-S3 Bench Template (devlink)
 
-The design lives in `SPEC.md` (v0.9). Read it before changing anything; it is the source of truth.
+The design lives in `SPEC.md` (v0.10). Read it before changing anything; it is the source of truth.
 `SPEC_v0.2.md` is an old version kept for reference only.
 
 ## Ground rules
@@ -37,6 +37,8 @@ The design lives in `SPEC.md` (v0.9). Read it before changing anything; it is th
 | PC app | `pc\.venv\Scripts\python pc\devlink.py` (setup: see `pc/requirements.txt`) |
 | PC app unit + GUI tests | `pc\.venv\Scripts\python -m pytest pc/tests` |
 | HIL PC-app tests (milestone 5; asks the 10X password) | `pc\.venv\Scripts\python test/hil/hil_m5_pc.py --mac 7c:df:a1:f2:50:30 --ssid 10X --home 10X` |
+| Recovery variants for milestone 6 | `idf.py -C recovery -B build/recovery_v2 -DDEVLINK_EXTRA_DEFAULTS=<repo>/test/fw/recovery_v2.defaults build` (and `recovery_crash`) |
+| HIL Monitor + recovery update (milestone 6, via the app AP) | `powershell -File test/hil/run_via_ap.ps1 -Mac 7c:df:a1:f2:50:30 -HomeSsid 10X -Target app -Script hil_m6_net.py` |
 
 Board console over USB: `devlink info|status|restart|recovery|label <text>` and Improv Wi-Fi serial. Test builds add
 the HIL test console (`info`, `restart`, `crash`, `mode ...`, ...).

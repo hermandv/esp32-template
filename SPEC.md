@@ -1,4 +1,4 @@
-# ESP32-S3 Bench Template – Specification (v0.9 draft)
+# ESP32-S3 Bench Template – Specification (v0.10 draft)
 
 A reusable firmware + PC tool template for bringing up and testing ESP32-S3 hardware boards over Wi-Fi.
 Working name for the shared firmware layer: **devlink**.
@@ -31,6 +31,9 @@ Changes in v0.8 (milestone 4, streaming): WebSocket protocol details, batching, 
 Changes in v0.9 (milestone 5, PC app Devices + Firmware): PC stack without httpx (requests in worker threads); a LAN
 Wi-Fi change takes effect 1 s after the reply (§5.4); Improv frames bypass stdout newline conversion (§5.4); chunked
 OTA uploads are refused with 411 (§7.1); PC app implementation notes (§8).
+
+Changes in v0.10 (milestone 6): recovery update + self-test implemented with the self-test state in dlcfg instead of
+retained RTC (§7.3); Monitor tab with Qt Charts instead of pyqtgraph (§8).
 
 ---
 
@@ -565,6 +568,18 @@ Implementation notes (milestone 2, found on the bench):
   the RTC WDT resets it and, because the flag was one-shot, the bootloader boots the app again. The app reports the result.
 - Failed self-test → PC app shows a red warning and offers to re-flash the previous recovery file (kept in its history).
 
+Implementation (milestone 6): the self-test state lives in **dlcfg**, not in retained RTC. The bootloader writes a
+fresh RTC block on every boot, so a `SELFTEST` flag and its result would not survive the two reboots, and changing the
+frozen bootloader for it is not worth the risk. dlcfg fields (appended, §5.3): `rec_selftest` (none / pending / ok /
+failed) and `rec_selftest_version`.
+- App, `POST /ota?target=recovery`: refused (409) in recovery, while the app is `pending_verify`, or after a rollback;
+  images whose project name lacks "recovery" need `force=1`. Header checks as §7.1; `factory` is erased sector by
+  sector while the data arrives, then `esp_image_verify`. Then `rec_selftest=pending` + version, reply
+  `{"selftest":"running"}`, one-shot reboot into recovery.
+- Recovery with `pending`: AP up and HTTP answering within 30 s → `ok`, else `failed`; then `devlink_restart()` into
+  the app. A crash or hang never records anything; the app then finds `pending` at boot (`devlink_boot_early`) and
+  records `failed`. `/info` reports `recovery_selftest {state, version}`.
+
 ---
 
 ## 8. PC app (Python)
@@ -579,7 +594,13 @@ Implementation (milestone 5, `pc/devlink_pc/`, venv `pc/.venv`, `pc/requirements
 - The configure flow forces a Windows Wi-Fi scan (WlanScan) before joining/rejoining an AP; netsh output is parsed in
   English.
 - The bench Wi-Fi password is never stored; the configure dialog asks for it each time.
-- Monitor tab: milestone 6.
+- Monitor tab (milestone 6): Qt Charts (part of PySide6) instead of pyqtgraph, so no extra dependency. Channel table
+  with subscribe + rate per channel and the latest value; plot of the last 30 s (arrays: one line per element); log
+  console (level and text filter, pause, save); status line from `/status` every 2 s. The WebSocket client
+  (`stream.MonitorSession`) is Qt-free and reconnects after a reboot by finding the board again by MAC (its IP may
+  change), then replays the subscriptions and rates.
+- Firmware tab: target "recovery" with its own file history, an extra confirmation and the self-test result; on a
+  failed self-test it offers the previous recovery file.
 
 ### 8.1 Devices tab
 - Table keyed by **MAC**: id, label, IP, hostname, mode (app / recovery / needs-config), boot reason, app ver,

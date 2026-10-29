@@ -43,9 +43,18 @@ typedef struct {
     uint8_t reset_ring_pos;  /* next slot in reset_ring */
     uint8_t reserved[3];
     uint32_t reset_ring[DLCFG_RESET_RING]; /* esp_reset_reason_t values, newest at reset_ring_pos - 1 */
+    /* ---- appended (milestone 6): recovery self-test after a recovery update (SPEC §7.3) ---- */
+    uint8_t rec_selftest;    /* DLCFG_SELFTEST_* */
+    char rec_selftest_version[33]; /* recovery version the result belongs to */
+    uint8_t reserved2[2];
 } dlcfg_t;
 
-_Static_assert(sizeof(dlcfg_t) == 272, "dlcfg_t format 1 layout changed: fields may only be appended");
+#define DLCFG_SELFTEST_NONE    0u
+#define DLCFG_SELFTEST_PENDING 1u /* app wrote a new recovery and rebooted into it */
+#define DLCFG_SELFTEST_OK      2u /* recovery brought up Wi-Fi + HTTP */
+#define DLCFG_SELFTEST_FAILED  3u /* recovery crashed, hung or failed its checks */
+
+_Static_assert(sizeof(dlcfg_t) == 308, "dlcfg_t layout changed: fields may only be appended");
 _Static_assert(sizeof(dlcfg_header_t) + sizeof(dlcfg_t) <= DLCFG_SECTOR_SIZE, "record must fit a sector");
 
 /** Fill @p cfg with defaults (no credentials -> AP mode). */

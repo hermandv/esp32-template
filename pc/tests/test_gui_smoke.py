@@ -56,3 +56,23 @@ def test_firmware_tab(win):
     f.load(str(p))
     assert "bootlab" in f.details.text() and "API 1" in f.details.text() and not f.force.isEnabled()
     assert f.boards.count() == 1
+
+
+def test_monitor_tab(win):
+    m = win.monitor
+    m.channels = {"log": {"name": "log"}, "sys.temp": {"name": "sys.temp", "unit": "degC", "default_hz": 1, "max_hz": 10},
+                  "example.adc": {"name": "example.adc", "unit": "counts", "default_hz": 5, "max_hz": 50}}
+    m.fill_channels()
+    assert m.table.rowCount() == 2
+    m.handle_frames([{"ch": "sys.temp", "ts": 1, "v": 41.5}, {"ch": "example.adc", "ts": 2, "v": [1, 2, 3]},
+                     {"ch": "log", "ts": 3000000, "lvl": "W", "tag": "wifi", "msg": "STA down"},
+                     {"ch": "log", "ts": 3100000, "lvl": "D", "tag": "x", "msg": "debug noise"}])
+    assert m.table.item(m._row("sys.temp"), 4).text() == "41.5"
+    assert set(m.series) == {"sys.temp", "example.adc[0]", "example.adc[1]", "example.adc[2]"}
+    text = m.log.toPlainText()
+    assert "STA down" in text and "debug noise" not in text  # default filter: info and above
+    m.filter.setText("nomatch")
+    assert m.log.toPlainText() == ""
+    m.filter.setText("")
+    m.level.setCurrentIndex(1)  # debug and above
+    assert "debug noise" in m.log.toPlainText()

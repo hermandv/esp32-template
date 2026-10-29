@@ -9,6 +9,7 @@
 #include "dl_priv.h"
 #include "esp_flash.h"
 #include "esp_http_server.h"
+#include "esp_image_format.h"
 #include "esp_log.h"
 #include "esp_ota_ops.h"
 #include "freertos/FreeRTOS.h"
@@ -116,6 +117,132 @@ static esp_err_t fail(httpd_req_t *req, const char *status, const char *error, e
     return ESP_FAIL;
 }
 
+/* Recovery update (SPEC §7.3, I5): only from a valid app that was not just rolled back. Written straight into
+ * `factory` (no A/B), verified, then the self-test boot: the app marks the self-test pending in dlcfg and reboots into
+ * recovery; recovery records the result and restarts into the app. */
+static esp_err_t run_recovery_upload(httpd_req_t *req, bool force)
+{
+    const devlink_boot_info_t *bi = devlink_boot_info();
+    const esp_partition_t *part =
+        esp_partition_find_first(ESP_PARTITION_TYPE_APP, ESP_PARTITION_SUBTYPE_APP_FACTORY, NULL);
+    esp_ota_img_states_t state = ESP_OTA_IMG_UNDEFINED;
+
+    if (bi->mode != DEVLINK_MODE_APP) {
+        return fail(req, "409 Conflict", "recovery_cannot_update_itself", NULL, req->content_len);
+    }
+    if ((esp_ota_get_state_partition(esp_ota_get_running_partition(), &state) == ESP_OK) &&
+        (state == ESP_OTA_IMG_PENDING_VERIFY)) {
+        return fail(req, "409 Conflict", "app_not_valid_yet", NULL, req->content_len);
+    }
+    if (bi->reason == DL_BOOT_REASON_ROLLBACK) {
+        return fail(req, "409 Conflict", "app_just_rolled_back", NULL, req->content_len);
+    }
+    if (part == NULL) {
+        return fail(req, "500 Internal Server Error", "no_factory_partition", NULL, req->content_len);
+    }
+    uint32_t flash = 0;
+    (void)esp_flash_get_size(NULL, &flash);
+    dl_ota_expect_t exp = {
+        .chip_id = DL_CHIP_ID_ESP32S3,
+        .chip_rev_full = (uint16_t)efuse_hal_chip_revision(),
+        .flash_size = flash,
+        .partition_size = part->size,
+        .project_prefix = "",
+        .force = force,
+    };
+    dl_ota_result_t r = dl_ota_check_begin(&s_chk, &exp, (uint32_t)req->content_len);
+    if (r != DL_OTA_OK) {
+        return fail(req, "413 Payload Too Large", dl_ota_result_name(r), NULL, 0);
+    }
+    ESP_LOGW(TAG, "RECOVERY update: %u bytes -> factory", (unsigned)req->content_len);
+
+    size_t left = req->content_len;
+    size_t off = 0;        /* bytes written to factory */
+    size_t erased = 0;     /* factory erased up to here (sector by sector, so the server stays responsive) */
+    bool begun = false;
+    while (left > 0u) {
+        int n = httpd_req_recv(req, (char *)s_buf, (left < CHUNK) ? left : CHUNK);
+        if (n == HTTPD_SOCK_ERR_TIMEOUT) {
+            return fail(req, "408 Request Timeout", "idle_timeout", NULL, 0);
+        }
+        if (n <= 0) {
+            return fail(req, "400 Bad Request", "connection_lost", NULL, 0);
+        }
+        left -= (size_t)n;
+        bool flush;
+        size_t data_off;
+        r = dl_ota_check_feed(&s_chk, s_buf, (size_t)n, &flush, &data_off);
+        if (r == DL_OTA_NEED_MORE) {
+            continue;
+        }
+        if (r != DL_OTA_OK) {
+            return fail(req, "400 Bad Request", dl_ota_result_name(r), NULL, left);
+        }
+        if (flush && !force && (strstr(s_chk.project, "recovery") == NULL)) {
+            return fail(req, "400 Bad Request", "not_a_recovery_image", NULL, left); /* nothing written yet */
+        }
+        /* Header accepted: write the buffered head, then this chunk's remainder. */
+        const uint8_t *pieces[2] = {flush ? s_chk.head : NULL, s_buf + data_off};
+        size_t lens[2] = {flush ? s_chk.head_len : 0u, (size_t)n - data_off};
+        if (flush) {
+            begun = true;
+            strncpy(s_prog.version, s_chk.version, sizeof(s_prog.version) - 1u);
+        }
+        for (int i = 0; (i < 2) && begun; i++) {
+            if (lens[i] == 0u) {
+                continue;
+            }
+            while (erased < off + lens[i]) {
+                if (esp_partition_erase_range(part, erased, 4096) != ESP_OK) {
+                    return fail(req, "500 Internal Server Error", "factory_erase_failed", NULL, left);
+                }
+                erased += 4096u;
+            }
+            if (esp_partition_write(part, off, pieces[i], lens[i]) != ESP_OK) {
+                return fail(req, "500 Internal Server Error", "factory_write_failed", NULL, left);
+            }
+            off += lens[i];
+        }
+        s_prog.written = (uint32_t)off;
+    }
+    r = dl_ota_check_finish(&s_chk);
+    if (r != DL_OTA_OK) {
+        return fail(req, "400 Bad Request", dl_ota_result_name(r), NULL, 0);
+    }
+    s_prog.state = "verifying";
+    esp_image_metadata_t meta;
+    esp_partition_pos_t pos = {.offset = part->address, .size = part->size};
+    if (esp_image_verify(ESP_IMAGE_VERIFY, &pos, &meta) != ESP_OK) {
+        /* factory now holds a broken image; the app stays valid (I5), the PC app offers the previous recovery */
+        return fail(req, "400 Bad Request", "recovery_image_corrupt", NULL, 0);
+    }
+
+    dlcfg_t cfg;
+    (void)dlcfg_load(&cfg);
+    cfg.rec_selftest = DLCFG_SELFTEST_PENDING;
+    strncpy(cfg.rec_selftest_version, s_chk.version, sizeof(cfg.rec_selftest_version) - 1u);
+    cfg.rec_selftest_version[sizeof(cfg.rec_selftest_version) - 1u] = '\0';
+    if (dlcfg_save(&cfg) != ESP_OK) {
+        return fail(req, "500 Internal Server Error", "config_save_failed", NULL, 0);
+    }
+    s_prog.state = "done";
+    ESP_LOGW(TAG, "recovery %s written and verified: self-test boot", s_chk.version);
+
+    char body[192];
+    dl_jw_t w;
+    dl_jw_init(&w, body, sizeof(body));
+    dl_jw_raw(&w, "{\"ok\":true");
+    dl_jw_kv_str(&w, "project", s_chk.project);
+    dl_jw_kv_str(&w, "version", s_chk.version);
+    dl_jw_kv_str(&w, "slot", part->label);
+    dl_jw_kv_str(&w, "selftest", "running");
+    dl_jw_raw(&w, "}");
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_sendstr(req, body);
+    dl_http_schedule_reboot(1); /* one-shot into recovery: the self-test boot */
+    return ESP_OK;
+}
+
 /* The upload itself, in the OTA worker task (the lock is already held). */
 static esp_err_t run_upload(httpd_req_t *req, bool to_recovery, bool force)
 {
@@ -126,8 +253,7 @@ static esp_err_t run_upload(httpd_req_t *req, bool to_recovery, bool force)
     s_prog.total = req->content_len;
 
     if (to_recovery) {
-        /* Recovery update (SPEC §7.3) comes with milestone 6; recovery never updates itself. */
-        return fail(req, "501 Not Implemented", "recovery_update_not_available", NULL, req->content_len);
+        return run_recovery_upload(req, force);
     }
     const esp_partition_t *part = target_slot();
     if (part == NULL) {

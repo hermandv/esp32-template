@@ -6,6 +6,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from PySide6.QtCore import Qt
+from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QFileDialog, QFormLayout, QGroupBox,
                                QHBoxLayout, QHeaderView, QLabel, QListWidget, QListWidgetItem, QMessageBox,
                                QPushButton, QTableWidget, QTableWidgetItem, QVBoxLayout, QWidget)
@@ -35,8 +36,8 @@ class FirmwareTab(QWidget):
         self.force.setEnabled(False)
         self.target = QComboBox()
         self.target.addItem("app (default)", "app")
-        self.target.addItem("recovery (milestone 6)", "recovery")
-        self.target.model().item(1).setEnabled(False)
+        self.target.addItem("recovery (rare, guarded)", "recovery")
+        self.target.currentIndexChanged.connect(self._target_changed)
 
         self.boards = QListWidget()
         self.boards.setSelectionMode(QAbstractItemView.NoSelection)
@@ -72,9 +73,18 @@ class FirmwareTab(QWidget):
         self.refresh_boards()
 
     # ---- file ----
+    def is_recovery(self) -> bool:
+        return self.target.currentData() == "recovery"
+
+    def _target_changed(self) -> None:
+        self._fill_recent()
+        self.data, self.info = None, None
+        self.details.setText("Pick a recovery image (devlink_recovery*.bin)." if self.is_recovery() else
+                             "No file selected.")
+
     def _fill_recent(self) -> None:
         self.recent.clear()
-        for p in self.s.recent_app:
+        for p in (self.s.recent_recovery if self.is_recovery() else self.s.recent_app):
             self.recent.addItem(p, p)
 
     def pick(self) -> None:
@@ -89,8 +99,10 @@ class FirmwareTab(QWidget):
         except OSError as e:
             QMessageBox.warning(self, "Firmware file", str(e))
             return
-        self.info = image.parse(self.data, path)
+        self.info = image.parse(self.data, path, slot_size=ota.FACTORY_SIZE if self.is_recovery() else 0x300000)
         i = self.info
+        if self.is_recovery() and i.ok and "recovery" not in i.project:
+            i.warnings.append(f"'{i.project}' is not a recovery image")
         lines = [f"<b>{i.project or '?'}</b> {i.version}  &nbsp; built {i.date} {i.time} &nbsp; {i.idf}",
                  f"chip {i.chip}, chip revision {i.min_rev / 100:.2f}..{i.max_rev / 100:.2f}, {i.flash_mb} MB flash, "
                  f"{i.size} bytes, devlink marker {'API ' + str(i.api_version) if i.marker else 'missing'}",
@@ -101,7 +113,7 @@ class FirmwareTab(QWidget):
         self.force.setChecked(False)
         self.force.setEnabled(bool(i.warnings) and not i.errors)
         if i.ok and not i.errors:
-            self.s.remember_file(path)
+            self.s.remember_file(path, recovery=self.is_recovery())
             self.s.save()
             self._fill_recent()
             self.recent.setCurrentIndex(0)
@@ -139,6 +151,14 @@ class FirmwareTab(QWidget):
         if self.info.warnings and QMessageBox.question(
                 self, "Upload anyway?", "\n".join(self.info.warnings) + "\n\nUpload this file anyway?") != QMessageBox.Yes:
             return
+        rec = self.is_recovery()
+        if rec and QMessageBox.warning(
+                self, "Recovery update",
+                "Replace the RECOVERY image (the safety net) on the selected board(s)?\n\n"
+                "Only from a valid, running app. The board then boots the new recovery once as a self-test and "
+                "returns to the app. If the self-test fails, the board has no working recovery until you "
+                "re-flash a good one.", QMessageBox.Yes | QMessageBox.Cancel) != QMessageBox.Yes:
+            return
         self.results.setRowCount(len(macs))
         self.row_of = {}
         for i, m in enumerate(macs):
@@ -148,11 +168,21 @@ class FirmwareTab(QWidget):
         hints = {r.mac: r.ip for r in self.devices.lan_devices()}
         self.running = True
         self.start_btn.setEnabled(False)
-        workers.run(lambda progress: [r for r in ota.run_batch(macs, self.data, self.s.api_key,
-                                                                force=self.force.isChecked(), hints=hints,
-                                                                mdns=self.devices.mdns, progress=progress,
-                                                                on_result=progress)],
-                    on_progress=self._progress, progress_kw="progress", on_done=self._done, on_error=self._error)
+        data, force, key, mdns = self.data, self.force.isChecked(), self.s.api_key, self.devices.mdns
+        step = ota.update_recovery if rec else ota.update_device
+
+        def batch(progress):
+            out = []
+            for mac in macs:  # one board at a time, stop at the first failure (SPEC §7.2)
+                r = step(mac, data, key, force, hints.get(mac), mdns, progress)
+                progress(r)
+                out.append(r)
+                if not r.ok:
+                    break
+            return out
+
+        workers.run(batch, on_progress=self._progress, progress_kw="progress", on_done=self._done,
+                    on_error=self._error)
 
     def _progress(self, p) -> None:
         if isinstance(p, tuple) and len(p) == 4:
@@ -167,12 +197,29 @@ class FirmwareTab(QWidget):
             if row is not None:
                 self.results.item(row, 1).setText(p.state)
                 self.results.item(row, 3).setText(p.message)
+                if p.state in ("selftest_failed", "rolled_back"):
+                    for c in range(4):
+                        self.results.item(row, c).setBackground(QColor(255, 190, 190))
 
     def _done(self, results) -> None:
         self.running = False
         self.start_btn.setEnabled(True)
         for r in results:
             self._progress(r)
+        failed = [r for r in results if r.state == "selftest_failed"]
+        if failed and len(self.s.recent_recovery) > 1:
+            prev = self.s.recent_recovery[1]
+            if QMessageBox.critical(
+                    self, "Recovery self-test failed",
+                    f"The new recovery failed its self-test on {', '.join(r.mac for r in failed)}.\n\n"
+                    f"Re-flash the previous recovery file?\n{prev}",
+                    QMessageBox.Yes | QMessageBox.No) == QMessageBox.Yes:
+                self.load(prev)
+                self.start()
+                return
+        elif failed:
+            QMessageBox.critical(self, "Recovery self-test failed", "The new recovery failed its self-test. Pick a "
+                                 "known-good recovery file and update again.")
         for m, row in self.row_of.items():
             if self.results.item(row, 1).text() == "waiting":
                 self.results.item(row, 1).setText("skipped")

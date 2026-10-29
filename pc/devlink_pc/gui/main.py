@@ -11,6 +11,7 @@ from .. import __version__
 from ..settings import Settings, data_dir
 from .devices import DevicesTab
 from .firmware import FirmwareTab
+from .monitor import MonitorTab
 
 
 class SettingsDialog(QDialog):
@@ -57,9 +58,8 @@ class MainWindow(QMainWindow):
         tabs = QTabWidget()
         tabs.addTab(self.devices, "Devices")
         tabs.addTab(self.firmware, "Firmware")
-        monitor = QLabel("Monitor (live channels, log console) arrives in milestone 6.")
-        tabs.addTab(monitor, "Monitor")
-        tabs.setTabEnabled(2, False)
+        self.monitor = MonitorTab(self.s, self.devices)
+        tabs.addTab(self.monitor, "Monitor")
         self.setCentralWidget(tabs)
         m = self.menuBar().addMenu("&File")
         m.addAction("Settings…", self.open_settings)
@@ -78,6 +78,7 @@ class MainWindow(QMainWindow):
             d.apply()
 
     def closeEvent(self, e) -> None:  # noqa: N802
+        self.monitor.stop()
         self.devices.stop()
         super().closeEvent(e)
 

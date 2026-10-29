@@ -265,7 +265,7 @@ DLCFG_SECTOR = 4096
 
 def dlcfg_payload(ssid: str = "", password: str = "", label: str = "", log_level: int = 3,
                   ap_window_s: int = 20, button_window_s: int = 120) -> bytes:
-    """dlcfg_t format 1 (components/devlink/include/dlcfg_core.h), 272 bytes."""
+    """dlcfg_t format 1 (components/devlink/include/dlcfg_core.h), 308 bytes (272 + the milestone-6 fields)."""
     def s(v: str, n: int) -> bytes:
         b = v.encode()
         if len(b) > n - 1:
@@ -276,7 +276,8 @@ def dlcfg_payload(ssid: str = "", password: str = "", label: str = "", log_level
     # reserved @235..237, padding @238..239, reset_ring[8] @240..271.
     p = s(ssid, 33) + s(password, 65) + s("", 33) + s("", 65) + s(label, 33)
     p += struct.pack("<BHHB3s2x8I", log_level, ap_window_s, button_window_s, 0, b"\0" * 3, *([0] * 8))
-    assert len(p) == 272, len(p)
+    p += struct.pack("<B33s2s", 0, b"", b"")  # recovery self-test (milestone 6): none
+    assert len(p) == 308, len(p)
     return p
 
 

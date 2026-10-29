@@ -217,6 +217,12 @@ esp_err_t devlink_boot_early(devlink_mode_t mode)
     esp_err_t cfg_err = dlcfg_load(&cfg);
     if ((esp_reset_reason() != ESP_RST_DEEPSLEEP) && (cfg_err == ESP_OK)) {
         dlcfg_push_reset_reason(&cfg, (uint32_t)esp_reset_reason());
+        /* The app runs while a recovery self-test is still pending: the new recovery never reported back
+         * (crashed or hung), SPEC §7.3. Decided here, before anything can read /info. */
+        if ((mode == DEVLINK_MODE_APP) && (cfg.rec_selftest == DLCFG_SELFTEST_PENDING)) {
+            cfg.rec_selftest = DLCFG_SELFTEST_FAILED;
+            ESP_LOGE(TAG, "recovery self-test FAILED (recovery %s did not report back)", cfg.rec_selftest_version);
+        }
         (void)dlcfg_save(&cfg);
     }
 

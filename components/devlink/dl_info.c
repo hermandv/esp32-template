@@ -223,6 +223,14 @@ void dl_info_json(dl_jw_t *w)
     } else {
         dl_jw_raw(w, "null");
     }
+    static const char *const selftest[] = {"none", "pending", "ok", "failed"};
+    dlcfg_t st_cfg;
+    (void)dlcfg_load(&st_cfg);
+    dl_jw_key(w, "recovery_selftest");
+    dl_jw_raw(w, "{");
+    dl_jw_kv_str(w, "state", selftest[(st_cfg.rec_selftest <= 3u) ? st_cfg.rec_selftest : 0u]);
+    dl_jw_kv_str(w, "version", st_cfg.rec_selftest_version);
+    dl_jw_raw(w, "}");
 
     esp_bootloader_desc_t bd;
     dl_jw_key(w, "bootloader");

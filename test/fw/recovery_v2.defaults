@@ -1,0 +1,2 @@
+# Second good recovery build (other version) for the recovery-update tests (milestone 6). TEST BUILD.
+CONFIG_APP_PROJECT_VER="0.6.0-m6-v2"

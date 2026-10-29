@@ -115,3 +115,78 @@ def test_upload_is_not_chunked():
     body = _Upload(b"a" * 1000, None)
     p = requests.Request("POST", "http://x/api/v1/ota", data=body, headers={"Content-Length": "1000"}).prepare()
     assert p.headers.get("Content-Length") == "1000" and "Transfer-Encoding" not in p.headers
+
+
+# ---- recovery update (SPEC §7.3) ----
+
+REC = ROOT / "build" / "recovery" / "devlink_recovery.bin"
+
+
+def install_rec(monkeypatch, before: dict, script: list):
+    state = {"uploaded": None, "calls": 0, "target": None}
+    monkeypatch.setattr(ota, "find_by_mac", lambda mac, **kw: Seen(MAC, "10.0.0.5", {}, "udp", 0))
+    monkeypatch.setattr(ota.time, "sleep", lambda s: None)
+
+    class Api:
+        def __init__(self, *a, **kw):
+            pass
+
+        def info(self):
+            if state["uploaded"] is None:
+                return before
+            state["calls"] += 1
+            return script[min(state["calls"], len(script)) - 1]
+
+        def ota(self, data, target="app", force=False, progress=None):
+            state["uploaded"], state["target"] = data, target
+            return {"ok": True, "slot": "factory"}
+
+    monkeypatch.setattr(ota, "DeviceApi", Api)
+    return state
+
+
+def rec_info(mode="app", reason="normal", slot_state="valid", st="none", ver=""):
+    return {"mac": MAC, "mode": mode, "running": "ota_0", "fw": {"version": "app"}, "boot": {"reason": reason},
+            "chip": {"revision": 1, "flash_size": 8 << 20}, "recovery": {"version": "old-rec"},
+            "slots": [{"name": "ota_0", "state": slot_state}],
+            "recovery_selftest": {"state": st, "version": ver}}
+
+
+@pytest.fixture
+def rec() -> bytes:
+    if not REC.exists():
+        pytest.skip("build/recovery not built")
+    return REC.read_bytes()
+
+
+def new_ver(rec_bytes):
+    return ota.img.parse(rec_bytes).version
+
+
+def test_recovery_ok(monkeypatch, rec):
+    v = new_ver(rec)
+    s = install_rec(monkeypatch, rec_info(), [rec_info(mode="recovery"), rec_info(st="ok", ver=v)])
+    r = ota.update_recovery(MAC, rec, "k")
+    assert r.ok and s["target"] == "recovery" and r.old_version == "old-rec"
+
+
+def test_recovery_selftest_failed(monkeypatch, rec):
+    v = new_ver(rec)
+    install_rec(monkeypatch, rec_info(), [rec_info(st="pending", ver=v), rec_info(st="failed", ver=v)])
+    r = ota.update_recovery(MAC, rec, "k")
+    assert r.state == "selftest_failed" and "Re-flash" in r.message
+
+
+@pytest.mark.parametrize("before,why", [(rec_info(mode="recovery"), "runs recovery"),
+                                        (rec_info(slot_state="pending_verify"), "not marked valid"),
+                                        (rec_info(reason="rollback"), "rolled back")])
+def test_recovery_preconditions(monkeypatch, rec, before, why):
+    s = install_rec(monkeypatch, before, [])
+    r = ota.update_recovery(MAC, rec, "k")
+    assert r.state == "rejected" and why in r.message and s["uploaded"] is None
+
+
+def test_recovery_needs_a_recovery_image(monkeypatch, app):
+    s = install_rec(monkeypatch, rec_info(), [])
+    r = ota.update_recovery(MAC, app, "k")  # bootlab is not a recovery
+    assert r.state == "rejected" and "not a recovery image" in r.message and s["uploaded"] is None

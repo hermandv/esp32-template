@@ -133,3 +133,89 @@ def run_batch(macs: Iterable[str], data: bytes, key: str, force: bool = False, h
         yield r
         if not r.ok and stop_on_failure:
             return
+
+
+FACTORY_SIZE = 0x180000
+RECOVERY_BACK_S = 150  # write + verify, self-test boot (Wi-Fi + HTTP up), back into the app
+
+
+def update_recovery(mac: str, data: bytes, key: str, force: bool = False, hint_ip: str | None = None,
+                    mdns: MdnsBrowser | None = None, progress: Progress | None = None,
+                    back_s: float = RECOVERY_BACK_S) -> OtaResult:
+    """Recovery update (SPEC §7.3, I5): only from a valid app that was not just rolled back, then the self-test boot.
+    States: updated (self-test ok) / selftest_failed / rejected / failed / timeout."""
+    mac = norm_mac(mac)
+    res = OtaResult(mac)
+    say = progress or (lambda *_: None)
+    say(mac, "finding", 0, 0)
+    seen = find_by_mac(mac, timeout=6, mdns=mdns, hint_ip=hint_ip)
+    if seen is None:
+        res.state, res.message = "failed", "board not found on the network"
+        return res
+    api = DeviceApi(seen.ip, mac, key)
+    try:
+        before = api.info()
+    except (requests.RequestException, ApiError) as e:
+        res.state, res.message = "failed", f"/info: {e}"
+        return res
+    res.old_version = (before.get("recovery") or {}).get("version", "")
+    if before["mode"] != "app":
+        res.state, res.message = "rejected", "the board runs recovery: a recovery update is only done from a running app"
+        return res
+    if _slot_state(before, before["running"]) not in ("valid", "undefined"):
+        res.state, res.message = "rejected", "the running app is not marked valid yet"
+        return res
+    if before["boot"]["reason"] == "rollback":
+        res.state, res.message = "rejected", "the app was just rolled back: fix the app first"
+        return res
+
+    info = img.parse(data, chip_rev=before["chip"]["revision"], flash_size=before["chip"]["flash_size"],
+                     slot_size=FACTORY_SIZE)
+    res.new_version = info.version
+    warnings = list(info.warnings) + ([] if "recovery" in info.project else [f"'{info.project}' is not a recovery image"])
+    if info.errors:
+        res.state, res.message = "rejected", "; ".join(info.errors)
+        return res
+    if warnings and not force:
+        res.state, res.message = "rejected", "; ".join(warnings) + " (use force)"
+        return res
+
+    say(mac, "uploading recovery", 0, len(data))
+    try:
+        api.ota(data, target="recovery", force=force or bool(warnings),
+                progress=lambda d, t: say(mac, "uploading recovery", d, t))
+    except ApiError as e:
+        res.state, res.message = "rejected", f"board refused: {e.error}"
+        return res
+    except requests.RequestException as e:
+        res.state, res.message = "failed", f"upload: {e}"
+        return res
+
+    say(mac, "self-test boot", 0, 0)
+    end = time.time() + back_s
+    time.sleep(3)
+    last = None
+    while time.time() < end:
+        s = find_by_mac(mac, timeout=4, mdns=mdns, hint_ip=seen.ip)
+        if s is None:
+            continue
+        try:
+            last = DeviceApi(s.ip, mac, key).info()
+        except (requests.RequestException, ApiError, ValueError):
+            continue
+        st = last.get("recovery_selftest", {})
+        if last["mode"] == "recovery":
+            say(mac, "self-test running in recovery", 0, 0)
+        elif st.get("version") == info.version and st.get("state") in ("ok", "failed"):
+            res.boot_reason = last["boot"]["reason"]
+            if st["state"] == "ok":
+                res.state, res.message = "updated", f"recovery {info.version} written, self-test passed"
+            else:
+                res.state = "selftest_failed"
+                res.message = (f"recovery {info.version} FAILED its self-test: the board has no working recovery. "
+                               "Re-flash the previous recovery.")
+            return res
+        time.sleep(2)
+    res.state = "timeout"
+    res.message = "no self-test result within the time limit" if last else "board did not come back"
+    return res

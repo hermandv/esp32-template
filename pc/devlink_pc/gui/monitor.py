@@ -1,0 +1,287 @@
+"""Monitor tab (SPEC §8.3): channel list from /channels, subscribe and set rates, live plots (last 30 s), readouts,
+log console with level/text filter and save, status bar with auto-reconnect after a reboot."""
+
+from __future__ import annotations
+
+import time
+from collections import deque
+
+from PySide6.QtCharts import QChart, QChartView, QLineSeries, QValueAxis
+from PySide6.QtCore import QPointF, Qt, QTimer
+from PySide6.QtGui import QPainter
+from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QFileDialog, QHBoxLayout, QHeaderView,
+                               QLabel, QLineEdit, QPlainTextEdit, QPushButton, QSpinBox, QSplitter, QTableWidget,
+                               QTableWidgetItem, QVBoxLayout, QWidget)
+
+from ..api import DeviceApi
+from ..settings import data_dir
+from ..stream import MonitorSession
+from . import workers
+
+WINDOW_S = 30.0
+MAX_POINTS = 4000
+LEVELS = ["V", "D", "I", "W", "E"]
+
+
+class MonitorTab(QWidget):
+    def __init__(self, settings, devices, parent=None):
+        super().__init__(parent)
+        self.s, self.devices = settings, devices
+        self.session: MonitorSession | None = None
+        self.channels: dict[str, dict] = {}
+        self.points: dict[str, deque] = {}       # series name -> (t, v)
+        self.series: dict[str, QLineSeries] = {}
+        self.log_lines: deque = deque(maxlen=20000)
+        self.t0 = time.time()
+
+        # -- top: board + connect + status --
+        self.board = QComboBox()
+        self.board.setMinimumWidth(320)
+        self.connect_btn = QPushButton("Connect")
+        self.connect_btn.clicked.connect(self.toggle)
+        self.state = QLabel("not connected")
+        self.status = QLabel("")
+        top = QHBoxLayout()
+        top.addWidget(QLabel("Board"))
+        top.addWidget(self.board, 1)
+        top.addWidget(self.connect_btn)
+        top.addWidget(self.state)
+        top.addStretch(1)
+
+        # -- channels --
+        self.table = QTableWidget(0, 5)
+        self.table.setHorizontalHeaderLabels(["Channel", "Unit", "Sub", "Rate (Hz)", "Value"])
+        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeToContents)
+        self.table.horizontalHeader().setStretchLastSection(True)
+        self.table.setSelectionMode(QAbstractItemView.NoSelection)
+        self.table.verticalHeader().setVisible(False)
+
+        # -- plot --
+        self.chart = QChart()
+        self.chart.legend().setAlignment(Qt.AlignBottom)
+        self.ax_x = QValueAxis()
+        self.ax_x.setTitleText("s")
+        self.ax_y = QValueAxis()
+        self.chart.addAxis(self.ax_x, Qt.AlignBottom)
+        self.chart.addAxis(self.ax_y, Qt.AlignLeft)
+        view = QChartView(self.chart)
+        view.setRenderHint(QPainter.Antialiasing)
+        view.setMinimumHeight(220)
+
+        # -- log --
+        self.level = QComboBox()
+        for lv, name in zip(LEVELS, ["verbose", "debug", "info", "warning", "error"]):
+            self.level.addItem(f"{name} and above", lv)
+        self.level.setCurrentIndex(2)
+        self.level.currentIndexChanged.connect(self.rerender_log)
+        self.filter = QLineEdit()
+        self.filter.setPlaceholderText("filter text / tag")
+        self.filter.textChanged.connect(self.rerender_log)
+        self.pause = QCheckBox("Pause")
+        save = QPushButton("Save log…")
+        save.clicked.connect(self.save_log)
+        self.log = QPlainTextEdit()
+        self.log.setReadOnly(True)
+        self.log.setMaximumBlockCount(5000)
+        self.log.setLineWrapMode(QPlainTextEdit.NoWrap)
+        lt = QHBoxLayout()
+        for w in (QLabel("Log"), self.level, self.filter, self.pause, save):
+            lt.addWidget(w)
+        logw = QWidget()
+        lv = QVBoxLayout(logw)
+        lv.setContentsMargins(0, 0, 0, 0)
+        lv.addLayout(lt)
+        lv.addWidget(self.log)
+
+        right = QSplitter(Qt.Vertical)
+        right.addWidget(view)
+        right.addWidget(logw)
+        split = QSplitter(Qt.Horizontal)
+        split.addWidget(self.table)
+        split.addWidget(right)
+        split.setStretchFactor(1, 3)
+        lay = QVBoxLayout(self)
+        lay.addLayout(top)
+        lay.addWidget(split, 1)
+        lay.addWidget(self.status)
+
+        self.t_ui = QTimer(self, interval=150, timeout=self.pump)
+        self.t_status = QTimer(self, interval=2000, timeout=self.poll_status)
+        devices.devices_changed.connect(self.refresh_boards)
+        self.refresh_boards()
+
+    # ---- boards / connection ----
+    def refresh_boards(self) -> None:
+        cur = self.board.currentData()
+        self.board.blockSignals(True)
+        self.board.clear()
+        for r in sorted(self.devices.lan_devices(), key=lambda r: r.label or r.mac):
+            self.board.addItem(f"{r.label or '(no name)'}  {r.mac}  {r.ip}  ({r.mode})", (r.mac, r.ip))
+        i = next((k for k in range(self.board.count()) if cur and self.board.itemData(k)[0] == cur[0]), 0)
+        self.board.setCurrentIndex(i)
+        self.board.blockSignals(False)
+
+    def toggle(self) -> None:
+        if self.session is not None:
+            self.disconnect_board()
+            return
+        data = self.board.currentData()
+        if not data:
+            return
+        mac, ip = data
+        self.connect_btn.setText("Disconnect")
+        self.state.setText("loading channels…")
+        workers.run(lambda: DeviceApi(ip, mac, self.s.api_key).channels(), on_done=lambda j: self._start(mac, ip, j),
+                    on_error=lambda e: self._failed(e))
+
+    def _failed(self, err: str) -> None:
+        self.state.setText(f"failed: {err.splitlines()[0]}")
+        self.connect_btn.setText("Connect")
+
+    def _start(self, mac: str, ip: str, j: dict) -> None:
+        self.channels = {c["name"]: c for c in j.get("channels", [])}
+        self.fill_channels()
+        self.t0 = time.time()
+        self.session = MonitorSession(mac, ip, self.devices.mdns)
+        self.session.subscribe("log")  # the log console is always on
+        self.t_ui.start()
+        self.t_status.start()
+        self.poll_status()
+
+    def disconnect_board(self) -> None:
+        if self.session:
+            self.session.close()
+        self.session = None
+        self.t_ui.stop()
+        self.t_status.stop()
+        self.connect_btn.setText("Connect")
+        self.state.setText("not connected")
+
+    def stop(self) -> None:
+        self.disconnect_board()
+
+    # ---- channel table ----
+    def fill_channels(self) -> None:
+        names = [n for n in self.channels if n != "log"]
+        self.table.setRowCount(len(names))
+        for row, name in enumerate(names):
+            c = self.channels[name]
+            self.table.setItem(row, 0, QTableWidgetItem(name))
+            self.table.setItem(row, 1, QTableWidgetItem(c.get("unit", "")))
+            chk = QCheckBox()
+            chk.toggled.connect(lambda on, n=name: self.set_sub(n, on))
+            self.table.setCellWidget(row, 2, chk)
+            spin = QSpinBox()
+            spin.setRange(0, c.get("max_hz") or 1000)
+            spin.setValue(c.get("default_hz", 1))
+            spin.setToolTip("0 = every value")
+            spin.valueChanged.connect(lambda hz, n=name: self.session and self.session.set_rate(n, hz))
+            self.table.setCellWidget(row, 3, spin)
+            self.table.setItem(row, 4, QTableWidgetItem(""))
+
+    def _row(self, name: str) -> int:
+        for r in range(self.table.rowCount()):
+            if self.table.item(r, 0).text() == name:
+                return r
+        return -1
+
+    def set_sub(self, name: str, on: bool) -> None:
+        if self.session is None:
+            return
+        if on:
+            spin = self.table.cellWidget(self._row(name), 3)
+            self.session.subscribe(name, spin.value())
+        else:
+            self.session.unsubscribe(name)
+            for key in [k for k in self.series if k == name or k.startswith(name + "[")]:
+                self.chart.removeSeries(self.series.pop(key))
+                self.points.pop(key, None)
+
+    # ---- frames ----
+    def pump(self) -> None:
+        if self.session is None:
+            return
+        st = self.session.state
+        self.state.setText({"connected": "connected", "reconnecting": f"reconnecting… ({self.session.reconnects})",
+                            "refused": "refused: the board already has 2 clients"}.get(st, st))
+        self.handle_frames(self.session.drain())
+
+    def handle_frames(self, frames: list[dict]) -> None:
+        """Apply frames to the readouts, the plot buffers and the log (also used by tests)."""
+        now = time.time() - self.t0
+        new_log = []
+        for f in frames:
+            ch = f.get("ch")
+            if ch == "log":
+                line = f"{f.get('ts', 0) / 1e6:10.3f} {f.get('lvl', 'I')} {f.get('tag', '')}: {f.get('msg', '')}"
+                self.log_lines.append((f.get("lvl", "I"), line))
+                new_log.append((f.get("lvl", "I"), line))
+                continue
+            v = f.get("v")
+            row = self._row(ch)
+            if row >= 0:
+                self.table.item(row, 4).setText(str(v) if not isinstance(v, float) else f"{v:.4g}")
+            vals = [(ch, v)] if isinstance(v, (int, float)) else (
+                [(f"{ch}[{i}]", x) for i, x in enumerate(v) if isinstance(x, (int, float))] if isinstance(v, list) else [])
+            for key, x in vals:
+                dq = self.points.setdefault(key, deque(maxlen=MAX_POINTS))
+                dq.append((now, float(x)))
+                if key not in self.series:
+                    s = QLineSeries()
+                    s.setName(key)
+                    self.chart.addSeries(s)
+                    s.attachAxis(self.ax_x)
+                    s.attachAxis(self.ax_y)
+                    self.series[key] = s
+        if new_log and not self.pause.isChecked():
+            for lvl, line in new_log:
+                if self._log_ok(lvl, line):
+                    self.log.appendPlainText(line)
+        self.redraw(now)
+
+    def redraw(self, now: float) -> None:
+        lo, hi = None, None
+        for key, s in self.series.items():
+            pts = [QPointF(t, v) for t, v in self.points.get(key, ()) if t >= now - WINDOW_S]
+            s.replace(pts)
+            for p in pts:
+                lo = p.y() if lo is None else min(lo, p.y())
+                hi = p.y() if hi is None else max(hi, p.y())
+        self.ax_x.setRange(max(0.0, now - WINDOW_S), max(WINDOW_S, now))
+        if lo is not None:
+            pad = (hi - lo) * 0.1 or 1.0
+            self.ax_y.setRange(lo - pad, hi + pad)
+
+    # ---- log ----
+    def _log_ok(self, lvl: str, line: str) -> bool:
+        min_lvl = self.level.currentData()
+        text = self.filter.text().strip().lower()
+        return (LEVELS.index(lvl) if lvl in LEVELS else 2) >= LEVELS.index(min_lvl) and (not text or text in line.lower())
+
+    def rerender_log(self) -> None:
+        self.log.setPlainText("\n".join(line for lvl, line in self.log_lines if self._log_ok(lvl, line)))
+        self.log.verticalScrollBar().setValue(self.log.verticalScrollBar().maximum())
+
+    def save_log(self) -> None:
+        default = str(data_dir() / f"log_{time.strftime('%Y%m%d_%H%M%S')}.txt")
+        path, _ = QFileDialog.getSaveFileName(self, "Save log", default, "Text (*.txt)")
+        if path:
+            with open(path, "w", encoding="utf-8") as fh:
+                fh.write("\n".join(line for _, line in self.log_lines) + "\n")
+
+    # ---- status bar ----
+    def poll_status(self) -> None:
+        if self.session is None:
+            return
+        ip, mac = self.session.ip, self.session.mac
+
+        def show(st):
+            w = st.get("wifi", {})
+            self.status.setText(
+                f"uptime {st['uptime_ms'] // 1000} s   heap {st['heap_free'] // 1024} KiB   "
+                f"RSSI {w.get('rssi') if w.get('sta_connected') else 'AP'}   drops {st.get('drops', 0)}"
+                f"{' (+' + str(self.session.lost_frames) + ' on PC)' if self.session and self.session.lost_frames else ''}"
+                f"   temp {st.get('temp')}   error {st.get('last_error') or '-'}")
+
+        workers.run(lambda: DeviceApi(ip, mac, self.s.api_key, timeout=2).status(), on_done=show,
+                    on_error=lambda e: self.status.setText("status: no answer"))

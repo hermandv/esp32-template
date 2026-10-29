@@ -203,6 +203,30 @@ static void dlcfg_unterminated_strings_are_cut(void)
     UT_EQ(strlen(c.wifi_ssid), 32);
 }
 
+static void dlcfg_reads_milestone5_record(void)
+{
+    /* A record written by firmware before the self-test fields existed (272-byte payload) still loads; the new fields
+     * get their defaults. Same as on a board updated from milestone 5. */
+    uint8_t s[SEC];
+    memset(s, 0xFF, SEC);
+    dlcfg_t a = cfg_with("old", "m5 board");
+    a.rec_selftest = DLCFG_SELFTEST_OK; /* must NOT come through: it is beyond the old payload */
+    dlcfg_build(&a, 7u, s, SEC);
+    dlcfg_header_t h;
+    memcpy(&h, s, sizeof(h));
+    h.payload_len = 272;
+    uint32_t st = dl_crc32_update(DL_CRC32_INIT, &h, (uint32_t)offsetof(dlcfg_header_t, crc));
+    st = dl_crc32_update(st, s + sizeof(h), h.payload_len);
+    h.crc = ~st;
+    memcpy(s, &h, sizeof(h));
+    dlcfg_t c;
+    uint32_t seq;
+    UT_CHECK(dlcfg_parse(s, SEC, &c, &seq));
+    UT_CHECK(strcmp(c.label, "m5 board") == 0);
+    UT_EQ(c.rec_selftest, DLCFG_SELFTEST_NONE);
+    UT_EQ(c.rec_selftest_version[0], 0);
+}
+
 static void dlcfg_reset_ring(void)
 {
     dlcfg_t c;
@@ -224,6 +248,7 @@ int main(void)
     UT_RUN(dlcfg_t16_power_loss_at_every_point);
     UT_RUN(dlcfg_older_shorter_payload_keeps_defaults);
     UT_RUN(dlcfg_unterminated_strings_are_cut);
+    UT_RUN(dlcfg_reads_milestone5_record);
     UT_RUN(dlcfg_reset_ring);
     return UT_SUMMARY();
 }
