@@ -603,6 +603,8 @@ http://127.0.0.1:8470/) and opens the page in the browser; the Qt app stays avai
   that resets leaves the socket open: the page sends a probe op after 4 s of silence (the board answers any op, an
   unknown one with an error) and reconnects when no answer comes in 4 s, or when `/status` shows the uptime went back.
 - Firmware files: a path on this PC (remembered in the recent list) or a browser upload (kept under the data folder).
+- Plot: a tooltip at the mouse shows the time and each series' nearest sample, with a dot on each curve (looked up per
+  series, since the aligned plot data has gaps where the other series have samples).
 
 Implementation (milestone 5, `pc/devlink_pc/`, venv `pc/.venv`, `pc/requirements.txt`, run `pc/.venv/Scripts/python pc/devlink.py`):
 - A Qt-free library (`image`, `api`, `discovery`, `ota`, `improv`, `wifi_win`, `configure`) used by the GUI and by

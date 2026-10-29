@@ -648,17 +648,33 @@ const Mon = {
       width: $("plot").clientWidth || 800, height: 340,
       scales: {x: {time: false}},
       axes: [{...axis, label: "s"}, {...axis}],
-      cursor: {drag: {x: true, y: false}},
-      legend: {live: true},
+      cursor: {drag: {x: true, y: false}, points: {show: false}},  // own dots in tip()
+      legend: {live: false},  // values under the mouse: see tip() (the joined data has gaps per series)
       series: [{label: "t (s)", value: (u, v) => v == null ? "-" : v.toFixed(2)},
         ...keys.map((k, i) => ({label: k, stroke: this.colors[i % this.colors.length], width: 1.5, spanGaps: true,
           value: (u, v) => v == null ? "-" : (+v.toPrecision(4)).toString()}))],
       hooks: {
         setSelect: [(u) => { if (u.select.width > 0) { this.mode = "free"; this.markMode(); } }],
         ready: [(u) => u.over.addEventListener("dblclick", () => { this.mode = "all"; this.markMode(); this.dirty = true; })],
+        init: [(u) => {
+          this.tipEl = document.createElement("div");
+          this.tipEl.className = "plot-tip";
+          this.tipEl.hidden = true;
+          u.over.appendChild(this.tipEl);
+          this.dots = keys.map((k, i) => {
+            const d = document.createElement("div");
+            d.className = "plot-dot";
+            d.style.background = this.colors[i % this.colors.length];
+            d.hidden = true;
+            u.over.appendChild(d);
+            return d;
+          });
+        }],
+        setCursor: [(u) => this.tip(u)],
       },
     };
     $("plot").innerHTML = "";
+    this.tipEl = null;
     this.plot = new uPlot(opts, [[], ...keys.map(() => [])], $("plot"));
     this.plotKeys = keys.join("|");
   },
@@ -681,6 +697,41 @@ const Mon = {
     } else {
       this.plot.setData(data, this.mode === "all");
     }
+    if (this.tipEl && !this.tipEl.hidden) this.tip(this.plot);  // values move under a still mouse
+  },
+
+  /** Tooltip at the mouse: the time under it and, per series, the nearest sample (value, and a dot on the curve).
+   *  Looked up in each series' own points, because the aligned plot data has a gap for every other series. */
+  tip(u) {
+    const el = this.tipEl;
+    if (!el) return;
+    const {left, top} = u.cursor;
+    const keys = this.plotKeys ? this.plotKeys.split("|") : [];
+    if (left == null || left < 0 || !keys.length) { el.hidden = true; this.dots.forEach((d) => { d.hidden = true; }); return; }
+    const t = u.posToVal(left, "x");
+    const rows = [`<div class="text-secondary">t = ${t.toFixed(2)} s</div>`];
+    keys.forEach((k, i) => {
+      const p = this.points.get(k);
+      const dot = this.dots[i];
+      if (!p || !p.t.length) { if (dot) dot.hidden = true; return; }
+      let lo = 0, hi = p.t.length - 1;
+      while (lo < hi) { const mid = (lo + hi) >> 1; if (p.t[mid] < t) lo = mid + 1; else hi = mid; }
+      if (lo > 0 && Math.abs(p.t[lo - 1] - t) < Math.abs(p.t[lo] - t)) lo--;
+      const v = p.v[lo];
+      const color = this.colors[i % this.colors.length];
+      rows.push(`<div><span class="plot-swatch" style="background:${color}"></span>${esc(k)} <b>${(+v.toPrecision(5)).toString()}</b>` +
+        (Math.abs(p.t[lo] - t) > 0.5 ? ` <span class="text-secondary">@ ${p.t[lo].toFixed(2)} s</span>` : "") + `</div>`);
+      if (dot) {
+        const x = u.valToPos(p.t[lo], "x"), y = u.valToPos(v, "y");
+        dot.hidden = !(x >= 0 && x <= u.over.clientWidth && y >= 0 && y <= u.over.clientHeight);
+        dot.style.left = `${x}px`; dot.style.top = `${y}px`;
+      }
+    });
+    el.innerHTML = rows.join("");
+    el.hidden = false;
+    const w = el.offsetWidth, h = el.offsetHeight;  // keep it inside the plot: flip left / up near the edges
+    el.style.left = `${left + 14 + w > u.over.clientWidth ? left - 14 - w : left + 14}px`;
+    el.style.top = `${Math.max(0, Math.min(top + 14, u.over.clientHeight - h))}px`;
   },
 
   markMode() {

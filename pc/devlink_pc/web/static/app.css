@@ -34,3 +34,16 @@
 #tabs .nav-link { background: transparent; color: var(--tblr-secondary); }
 #tabs .nav-link:hover { color: var(--tblr-body-color); }
 #tabs .nav-link.active { background: var(--tblr-primary-lt); color: var(--tblr-primary); }
+
+/* Plot tooltip: values under the mouse (app.js Mon.tip) */
+.plot-tip {
+  position: absolute; z-index: 10; pointer-events: none; white-space: nowrap;
+  padding: 4px 8px; font-size: 12px; line-height: 1.5; font-family: var(--tblr-font-monospace);
+  background: var(--tblr-bg-surface); color: var(--tblr-body-color);
+  border: 1px solid var(--tblr-border-color); border-radius: 4px; box-shadow: 0 2px 8px rgba(0, 0, 0, .15);
+}
+.plot-swatch { display: inline-block; width: 9px; height: 9px; border-radius: 2px; margin-right: 5px; }
+.plot-dot {
+  position: absolute; z-index: 9; pointer-events: none; width: 9px; height: 9px; margin: -4.5px 0 0 -4.5px;
+  border-radius: 50%; border: 2px solid var(--tblr-bg-surface);
+}
