@@ -1,0 +1,295 @@
+<!doctype html>
+<html lang="en" data-bs-theme="light">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>devlink</title>
+  <link rel="stylesheet" href="/static/vendor/tabler/tabler.min.css">
+  <link rel="stylesheet" href="/static/vendor/tabler-icons/tabler-icons.min.css">
+  <link rel="stylesheet" href="/static/vendor/uplot/uPlot.min.css">
+  <link rel="stylesheet" href="/static/app.css">
+  <script>
+    try { const t = localStorage.getItem("devlink_theme"); if (t) document.documentElement.dataset.bsTheme = t; } catch (e) {}
+  </script>
+</head>
+<body>
+<div class="page">
+  <header class="navbar navbar-expand-md d-print-none sticky-top">
+    <div class="container-fluid px-3 px-xl-4">
+      <span class="navbar-brand me-4"><i class="ti ti-cpu me-2 text-primary"></i>devlink</span>
+      <ul class="nav nav-pills" id="tabs">
+        <li class="nav-item"><a class="nav-link active" href="#devices" data-tab="devices"><i class="ti ti-devices me-1"></i>Devices</a></li>
+        <li class="nav-item"><a class="nav-link" href="#firmware" data-tab="firmware"><i class="ti ti-upload me-1"></i>Firmware</a></li>
+        <li class="nav-item"><a class="nav-link" href="#monitor" data-tab="monitor"><i class="ti ti-chart-line me-1"></i>Monitor</a></li>
+      </ul>
+      <div class="ms-auto d-flex align-items-center gap-2">
+        <span id="summary" class="text-secondary small d-none d-lg-inline"></span>
+        <span id="conn" class="badge bg-secondary-lt">connecting…</span>
+        <button class="btn btn-icon btn-ghost-secondary" id="themeBtn" title="Dark / light"><i class="ti ti-moon"></i></button>
+        <button class="btn btn-icon btn-ghost-secondary" id="settingsBtn" title="Settings"><i class="ti ti-settings"></i></button>
+      </div>
+    </div>
+  </header>
+
+  <div class="page-wrapper">
+    <div class="container-fluid px-3 px-xl-4 py-3">
+
+      <!-- ============================== Devices ============================== -->
+      <section data-page="devices">
+        <div class="card">
+          <div class="card-header gap-2 flex-wrap">
+            <h3 class="card-title">Boards</h3>
+            <div class="card-actions d-flex flex-wrap gap-2 align-items-center">
+              <label class="form-check form-switch m-0" title="Scan for config APs of boards without Wi-Fi settings">
+                <input class="form-check-input" type="checkbox" id="scanAps">
+                <span class="form-check-label">Look for unconfigured boards</span>
+              </label>
+              <button class="btn btn-sm" id="refreshBtn"><i class="ti ti-refresh me-1"></i>Refresh</button>
+              <button class="btn btn-sm" id="addIpBtn"><i class="ti ti-plus me-1"></i>Add by IP</button>
+              <button class="btn btn-sm" id="usbBtn"><i class="ti ti-usb me-1"></i>Configure via USB</button>
+            </div>
+          </div>
+          <div class="table-responsive">
+            <table class="table table-vcenter table-hover card-table" id="devTable">
+              <thead><tr>
+                <th>Label</th><th>MAC</th><th>ID</th><th>IP</th><th>Mode</th><th>Boot reason</th>
+                <th>App</th><th>Recovery</th><th>RSSI</th><th>Seen</th>
+              </tr></thead>
+              <tbody></tbody>
+            </table>
+          </div>
+          <div class="card-body border-top py-2" id="noDevices">
+            <span class="text-secondary">Looking for boards…</span>
+          </div>
+          <div class="card-footer d-flex flex-wrap gap-2 align-items-center">
+            <span class="text-secondary small me-2" id="selInfo">Select a board.</span>
+            <button class="btn btn-primary btn-sm" id="cfgBtn" data-need="config"><i class="ti ti-wifi me-1"></i>Configure…</button>
+            <a class="btn btn-sm" id="webBtn" data-need="lan" target="_blank" rel="noopener"><i class="ti ti-external-link me-1"></i>Web page</a>
+            <button class="btn btn-sm" id="nameBtn" data-need="lan"><i class="ti ti-tag me-1"></i>Set name…</button>
+            <button class="btn btn-sm" id="wifiBtn" data-need="lan"><i class="ti ti-wifi me-1"></i>Change Wi-Fi…</button>
+            <div class="dropdown">
+              <button class="btn btn-sm dropdown-toggle" data-bs-toggle="dropdown" data-need="lan"><i class="ti ti-power me-1"></i>Reboot</button>
+              <div class="dropdown-menu">
+                <a class="dropdown-item" href="#" data-reboot="app">Reboot (app)</a>
+                <a class="dropdown-item" href="#" data-reboot="recovery">Reboot to recovery</a>
+                <a class="dropdown-item" href="#" data-reboot="other">Boot other slot…</a>
+              </div>
+            </div>
+            <button class="btn btn-sm" id="resetBtn" data-need="lan"><i class="ti ti-eraser me-1"></i>Factory reset…</button>
+            <button class="btn btn-sm" id="dumpBtn" data-need="lan"><i class="ti ti-file-download me-1"></i>Core dump</button>
+          </div>
+        </div>
+        <div class="card mt-3">
+          <div class="card-header"><h3 class="card-title">Activity</h3></div>
+          <pre class="log-box m-0" id="notes"></pre>
+        </div>
+      </section>
+
+      <!-- ============================== Firmware ============================== -->
+      <section data-page="firmware" hidden>
+        <div class="row g-3">
+          <div class="col-12 col-xl-7">
+            <div class="card">
+              <div class="card-header"><h3 class="card-title">Firmware file</h3></div>
+              <div class="card-body">
+                <div class="row g-2 mb-3">
+                  <div class="col-12 col-md-4">
+                    <label class="form-label">Target</label>
+                    <select class="form-select" id="fwTarget">
+                      <option value="app">App (default)</option>
+                      <option value="recovery">Recovery (rare, guarded)</option>
+                    </select>
+                  </div>
+                  <div class="col-12 col-md-8">
+                    <label class="form-label">Recent files</label>
+                    <div class="input-group">
+                      <select class="form-select" id="fwRecent"></select>
+                      <button class="btn" id="fwRecentLoad">Load</button>
+                    </div>
+                  </div>
+                </div>
+                <label class="form-label">Path on this PC, or pick a file</label>
+                <div class="input-group mb-2">
+                  <input class="form-control font-monospace" id="fwPath" placeholder="C:\projects\...\build\app\devlink_app.bin">
+                  <button class="btn" id="fwPathLoad">Load</button>
+                  <label class="btn"><i class="ti ti-folder-open me-1"></i>Browse…<input type="file" id="fwFile" accept=".bin" hidden></label>
+                </div>
+                <div id="fwDetails" class="mt-3 text-secondary">No file loaded.</div>
+                <label class="form-check mt-3 mb-0" id="fwForceWrap" hidden>
+                  <input class="form-check-input" type="checkbox" id="fwForce">
+                  <span class="form-check-label">Upload anyway (override the warnings above)</span>
+                </label>
+              </div>
+            </div>
+          </div>
+          <div class="col-12 col-xl-5">
+            <div class="card h-100">
+              <div class="card-header">
+                <h3 class="card-title">Boards</h3>
+                <div class="card-subtitle ms-2">one at a time, stops at the first failure</div>
+              </div>
+              <div class="list-group list-group-flush" id="fwBoards"></div>
+              <div class="card-body py-2 text-secondary" id="fwNoBoards">No boards on the network.</div>
+              <div class="card-footer">
+                <button class="btn btn-primary w-100" id="fwStart"><i class="ti ti-upload me-1"></i>Update selected boards</button>
+              </div>
+            </div>
+          </div>
+          <div class="col-12">
+            <div class="card">
+              <div class="card-header"><h3 class="card-title" id="fwJobTitle">Results</h3></div>
+              <div class="table-responsive">
+                <table class="table table-vcenter card-table" id="fwResults">
+                  <thead><tr><th>Board</th><th>Phase</th><th style="width:30%">Progress</th><th>Result</th></tr></thead>
+                  <tbody></tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- ============================== Monitor ============================== -->
+      <section data-page="monitor" hidden>
+        <div class="card mb-3">
+          <div class="card-body py-2 d-flex flex-wrap gap-2 align-items-center">
+            <label class="form-label m-0 me-1">Board</label>
+            <select class="form-select w-auto flex-grow-1" style="max-width:520px" id="monBoard"></select>
+            <button class="btn btn-primary" id="monConnect"><i class="ti ti-plug-connected me-1"></i>Connect</button>
+            <span class="badge bg-secondary-lt" id="monState">not connected</span>
+            <span class="ms-auto small text-secondary font-monospace" id="monStatus"></span>
+          </div>
+        </div>
+        <div class="row g-3">
+          <div class="col-12 col-xl-4">
+            <div class="card h-100">
+              <div class="card-header"><h3 class="card-title">Channels</h3></div>
+              <div class="table-responsive">
+                <table class="table table-vcenter card-table table-sm" id="monChannels">
+                  <thead><tr><th>Channel</th><th>Unit</th><th>Sub</th><th>Hz</th><th>Value</th></tr></thead>
+                  <tbody></tbody>
+                </table>
+              </div>
+              <div class="card-body py-2 text-secondary" id="monNoChannels">Connect to a board to list its channels.</div>
+            </div>
+          </div>
+          <div class="col-12 col-xl-8">
+            <div class="card">
+              <div class="card-header">
+                <h3 class="card-title">Plot</h3>
+                <div class="card-actions btn-group">
+                  <button class="btn btn-sm active" id="plotFollow" title="Scroll with the newest data">Follow last 30 s</button>
+                  <button class="btn btn-sm" id="plotAll" title="All data on x (keeps growing), y fitted">Show all</button>
+                </div>
+              </div>
+              <div class="card-body">
+                <div id="plot"></div>
+                <div class="small text-secondary mt-1">Drag to zoom in on a time range · double-click for Show all · hover for values</div>
+              </div>
+            </div>
+          </div>
+          <div class="col-12">
+            <div class="card">
+              <div class="card-header gap-2 flex-wrap">
+                <h3 class="card-title">Log</h3>
+                <div class="card-actions d-flex flex-wrap gap-2 align-items-center">
+                  <select class="form-select form-select-sm w-auto" id="logLevel">
+                    <option value="V">verbose and above</option>
+                    <option value="D">debug and above</option>
+                    <option value="I" selected>info and above</option>
+                    <option value="W">warning and above</option>
+                    <option value="E">error</option>
+                  </select>
+                  <input class="form-control form-control-sm w-auto" id="logFilter" placeholder="filter text / tag">
+                  <label class="form-check m-0"><input class="form-check-input" type="checkbox" id="logPause"><span class="form-check-label">Pause</span></label>
+                  <button class="btn btn-sm" id="logClear"><i class="ti ti-trash me-1"></i>Clear</button>
+                  <button class="btn btn-sm" id="logSave"><i class="ti ti-download me-1"></i>Save</button>
+                </div>
+              </div>
+              <pre class="log-box log-tall m-0" id="logBox"></pre>
+            </div>
+          </div>
+        </div>
+      </section>
+    </div>
+  </div>
+</div>
+
+<!-- ============================== Modals ============================== -->
+<div class="modal" id="cfgModal" tabindex="-1">
+  <div class="modal-dialog modal-dialog-centered">
+    <div class="modal-content">
+      <div class="modal-header"><h5 class="modal-title" id="cfgTitle">Configure</h5><button class="btn-close" data-bs-dismiss="modal"></button></div>
+      <div class="modal-body">
+        <p class="text-secondary small" id="cfgHint"></p>
+        <div class="mb-2"><label class="form-label">Wi-Fi SSID</label><input class="form-control" id="cfgSsid" autocomplete="off"></div>
+        <div class="mb-2"><label class="form-label">Password</label><input class="form-control" id="cfgPw" type="password" autocomplete="off">
+          <div class="form-hint">Sent to the board only; not stored by devlink.</div></div>
+        <div class="mb-2"><label class="form-label">Friendly name</label><input class="form-control" id="cfgLabel" maxlength="32"></div>
+        <pre class="log-box mt-3 mb-0" id="cfgLog" hidden></pre>
+      </div>
+      <div class="modal-footer">
+        <button class="btn" data-bs-dismiss="modal">Close</button>
+        <button class="btn btn-primary" id="cfgGo">Configure</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="modal" id="usbModal" tabindex="-1">
+  <div class="modal-dialog modal-dialog-centered">
+    <div class="modal-content">
+      <div class="modal-header"><h5 class="modal-title">Boards on USB</h5><button class="btn-close" data-bs-dismiss="modal"></button></div>
+      <div class="list-group list-group-flush" id="usbList"></div>
+      <div class="modal-body" id="usbMsg">Looking for boards that answer Improv…</div>
+    </div>
+  </div>
+</div>
+
+<div class="modal" id="askModal" tabindex="-1">
+  <div class="modal-dialog modal-dialog-centered">
+    <div class="modal-content">
+      <div class="modal-header"><h5 class="modal-title" id="askTitle"></h5><button class="btn-close" data-bs-dismiss="modal"></button></div>
+      <div class="modal-body">
+        <p id="askText" class="mb-2"></p>
+        <div id="askFields"></div>
+        <label class="form-check mt-2 mb-0" id="askCheckWrap" hidden><input class="form-check-input" type="checkbox" id="askCheck"><span class="form-check-label" id="askCheckText"></span></label>
+      </div>
+      <div class="modal-footer">
+        <button class="btn" data-bs-dismiss="modal">Cancel</button>
+        <button class="btn btn-primary" id="askOk">OK</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="modal" id="setModal" tabindex="-1">
+  <div class="modal-dialog modal-dialog-centered">
+    <div class="modal-content">
+      <div class="modal-header"><h5 class="modal-title">Settings</h5><button class="btn-close" data-bs-dismiss="modal"></button></div>
+      <div class="modal-body">
+        <div class="mb-2"><label class="form-label">API key (fixed at build time)</label><input class="form-control" id="setKey"></div>
+        <div class="mb-2"><label class="form-label">Config-AP password</label><input class="form-control" id="setApPw"></div>
+        <div class="mb-2"><label class="form-label">Bench Wi-Fi SSID</label><input class="form-control" id="setSsid">
+          <div class="form-hint">The bench Wi-Fi password is never stored; the configure dialog asks for it.</div></div>
+        <div class="row g-2">
+          <div class="col"><label class="form-label">Discovery every (s)</label><input class="form-control" type="number" min="2" max="120" id="setDisc"></div>
+          <div class="col"><label class="form-label">Config-AP scan every (s)</label><input class="form-control" type="number" min="5" max="300" id="setAps"></div>
+        </div>
+        <div class="mt-3 small text-secondary">Data folder: <span class="font-monospace" id="setDir"></span></div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn" data-bs-dismiss="modal">Cancel</button>
+        <button class="btn btn-primary" id="setSave">Save</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="toast-container position-fixed bottom-0 end-0 p-3" id="toasts"></div>
+
+<script src="/static/vendor/tabler/tabler.min.js"></script>
+<script src="/static/vendor/uplot/uPlot.iife.min.js"></script>
+<script src="/static/app.js"></script>
+</body>
+</html>

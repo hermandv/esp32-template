@@ -34,7 +34,8 @@ The design lives in `SPEC.md` (v0.11). Read it before changing anything; it is t
 | HIL network tests via the board AP (PC offline meanwhile) | `powershell -File test/hil/run_via_ap.ps1 -Mac 7c:df:a1:f2:50:30 -HomeSsid 10X` |
 | HIL app tests: OTA cycles, rollbacks (milestone 3, via the app AP) | `powershell -File test/hil/run_via_ap.ps1 -Mac 7c:df:a1:f2:50:30 -HomeSsid 10X -Target app -Script hil_m3_net.py` |
 | HIL streaming tests (milestone 4, via the app AP) | `powershell -File test/hil/run_via_ap.ps1 -Mac 7c:df:a1:f2:50:30 -HomeSsid 10X -Target app -Script hil_m4_net.py` |
-| PC app | `devlink.bat` (double-click) or `pc\.venv\Scripts\python pc\devlink.py` (setup: see `pc/requirements.txt`) |
+| PC app, web UI (branch `web-ui`) | `devlink.bat` (double-click), or `pc\.venv\Scripts\python pc\devlink_web.py [--port N] [--host 0.0.0.0]`: http://127.0.0.1:8470/ |
+| PC app, Qt desktop | `devlink-qt.bat` or `pc\.venv\Scripts\python pc\devlink.py` (setup: see `pc/requirements.txt`) |
 | PC app unit + GUI tests | `pc\.venv\Scripts\python -m pytest pc/tests` |
 | HIL PC-app tests (milestone 5; asks the 10X password) | `pc\.venv\Scripts\python test/hil/hil_m5_pc.py --mac 7c:df:a1:f2:50:30 --ssid 10X --home 10X` |
 | Recovery variants for milestone 6 | `idf.py -C recovery -B build/recovery_v2 -DDEVLINK_EXTRA_DEFAULTS=<repo>/test/fw/recovery_v2.defaults build` (and `recovery_crash`) |

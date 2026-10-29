@@ -592,6 +592,18 @@ failed) and `rec_selftest_version`.
 Stack: PySide6 (Qt), pyqtgraph, zeroconf (mDNS), httpx, websockets/QtWebSockets, pyserial (Improv serial client),
 `netsh` wrapper (Wi-Fi scan / join on Windows). PyInstaller single exe.
 
+Web UI (branch `web-ui`, v0.12 draft): `devlink.bat` starts a local Flask server (`pc/devlink_pc/web/`,
+http://127.0.0.1:8470/) and opens the page in the browser; the Qt app stays available as `devlink-qt.bat`.
+- The server does the PC-side work with the same Qt-free library (discovery threads, configure via AP/USB, OTA batches,
+  board actions as `/api/...` routes) and pushes the board list, job progress and notes to the page as Server-Sent
+  Events. Page: Tabler (layout, dark/light theme) + uPlot (canvas plots, fast at high rates); assets vendored, no CDN.
+- Bound to 127.0.0.1 unless started with `--host` (the server can flash boards). State-changing requests need the
+  header `X-Devlink: 1` and a localhost Host header (no cross-site requests, no DNS rebinding).
+- The Monitor page opens the board's WebSocket itself (no server hop). Browsers send no WebSocket pings, so a board
+  that resets leaves the socket open: the page sends a probe op after 4 s of silence (the board answers any op, an
+  unknown one with an error) and reconnects when no answer comes in 4 s, or when `/status` shows the uptime went back.
+- Firmware files: a path on this PC (remembered in the recent list) or a browser upload (kept under the data folder).
+
 Implementation (milestone 5, `pc/devlink_pc/`, venv `pc/.venv`, `pc/requirements.txt`, run `pc/.venv/Scripts/python pc/devlink.py`):
 - A Qt-free library (`image`, `api`, `discovery`, `ota`, `improv`, `wifi_win`, `configure`) used by the GUI and by
   the HIL tests; the GUI runs every network call in a worker thread. `requests` instead of httpx.

@@ -1,0 +1,36 @@
+/* devlink web UI: small additions to Tabler. */
+.log-box {
+  font-family: var(--tblr-font-monospace);
+  font-size: 12px;
+  line-height: 1.45;
+  height: 160px;
+  overflow: auto;
+  padding: .5rem .75rem;
+  background: var(--tblr-bg-surface-secondary);
+  color: var(--tblr-body-color);
+  white-space: pre;
+  border-radius: 0 0 var(--tblr-card-border-radius) var(--tblr-card-border-radius);
+}
+.log-tall { height: 260px; }
+.modal .log-box { border-radius: var(--tblr-border-radius); height: 150px; }
+
+#devTable tbody tr { cursor: pointer; }
+#devTable tbody tr.selected td { background: var(--tblr-primary-lt) !important; }
+#devTable td { white-space: nowrap; }
+
+.log-W { color: var(--tblr-warning); }
+.log-E { color: var(--tblr-danger); }
+.log-D, .log-V { color: var(--tblr-secondary); }
+
+/* uPlot in both themes */
+#plot { min-height: 340px; }
+#plot .u-legend { font-size: 12px; text-align: left; }
+#plot .u-legend .u-marker { border-radius: 2px; }
+[data-bs-theme="dark"] #plot .u-select { background: rgba(255, 255, 255, .12); }
+#monChannels input[type=number] { width: 5.5rem; }
+#monChannels td.val { font-family: var(--tblr-font-monospace); white-space: nowrap; }
+
+/* Page tabs: explicit active style (Tabler's pill colours lag behind class changes made from script) */
+#tabs .nav-link { background: transparent; color: var(--tblr-secondary); }
+#tabs .nav-link:hover { color: var(--tblr-body-color); }
+#tabs .nav-link.active { background: var(--tblr-primary-lt); color: var(--tblr-primary); }

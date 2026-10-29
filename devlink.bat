@@ -1,5 +1,6 @@
 @echo off
-rem Starts the devlink PC app (SPEC section 8). Double-click, or run from any folder.
+rem Starts the devlink web UI (SPEC section 8): a local server, and the page opens in the browser.
+rem Close this window to stop the server. The Qt desktop app is devlink-qt.bat.
 setlocal
 set "ROOT=%~dp0"
 set "PY=%ROOT%pc\.venv\Scripts\python.exe"
@@ -12,5 +13,6 @@ if not exist "%PY%" (
     exit /b 1
 )
 
-"%PY%" "%ROOT%pc\devlink.py" %*
+title devlink web UI
+"%PY%" "%ROOT%pc\devlink_web.py" %*
 if errorlevel 1 pause

@@ -84,11 +84,20 @@ in `X-Device-Id`, so a request can't reach the wrong board.
 
 ## Run the PC app
 
-Double-click `devlink.bat` in the repo root, or:
+Double-click `devlink.bat` in the repo root. It starts a small local server and opens the web UI in your browser at
+http://127.0.0.1:8470/. Close the server window to stop it. From a terminal:
 
 ```powershell
-pc\.venv\Scripts\python pc\devlink.py
+pc\.venv\Scripts\python pc\devlink_web.py
 ```
+
+- `--port N` picks another port.
+- `--host 0.0.0.0` lets other PCs on the network open the page. Only do this on a trusted network: anyone who can open
+  the page can flash boards.
+- The page has a dark/light switch (moon icon) and Settings (gear icon).
+
+The older Qt desktop app has the same three tabs. Start it with `devlink-qt.bat` or
+`pc\.venv\Scripts\python pc\devlink.py`.
 
 - **Devices**:
   - lists boards found through mDNS and UDP broadcast, and the config APs in range;

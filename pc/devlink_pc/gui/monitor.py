@@ -268,7 +268,13 @@ class MonitorTab(QWidget):
             self.plot.getViewBox().setAutoVisible(y=True)
             self.plot.enableAutoRange(axis="y")
         elif self.show_all:
-            self.plot.enableAutoRange(axis="xy")
+            # x from the data itself: curves clip to the current view, so pyqtgraph's own auto-range would not see
+            # points that arrived past the right edge and the view would stop growing
+            ts = [p[0] for pts in self.points.values() if pts for p in (pts[0], pts[-1])]
+            if ts:
+                self.plot.setXRange(min(ts), max(ts), padding=0.02)
+            self.plot.getViewBox().setAutoVisible(y=True)
+            self.plot.enableAutoRange(axis="y")
 
     # ---- view modes: follow the last 30 s, show all, or free (after zoom/pan with the mouse) ----
     def on_follow(self, on: bool) -> None:
@@ -279,7 +285,7 @@ class MonitorTab(QWidget):
     def show_all_data(self) -> None:
         self.show_all = True
         self.follow.setChecked(False)
-        self.plot.enableAutoRange(axis="xy")
+        self.redraw(time.time() - self.t0)
 
     def on_manual_range(self, *_) -> None:
         self.show_all = False
