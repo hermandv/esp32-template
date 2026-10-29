@@ -84,6 +84,8 @@ in `X-Device-Id`, so a request can't reach the wrong board.
 
 ## Run the PC app
 
+Double-click `devlink.bat` in the repo root, or:
+
 ```powershell
 pc\.venv\Scripts\python pc\devlink.py
 ```
