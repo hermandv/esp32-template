@@ -79,7 +79,7 @@ def test_monitor_tab(win):
     m.all_btn.click()  # show all: x spans every point and keeps growing, y fits
     assert m.show_all and not m.follow.isChecked()
     m.handle_frames([{"ch": "sys.temp", "ts": 4, "v": 50.0}])
-    m.plot.getViewBox().updateAutoRange()
+    m.plot.getViewBox().updateAutoRange()  # y auto-range is applied lazily (on the next paint)
     (x0, x1), (y0, y1) = m.plot.getViewBox().viewRange()
     xs = m.series["sys.temp"].getData()[0]
     assert x0 <= xs.min() and x1 >= xs.max() and y1 >= 50.0
