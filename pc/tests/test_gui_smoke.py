@@ -76,6 +76,16 @@ def test_monitor_tab(win):
     m.follow.setChecked(False)  # zoomed/panned: the view no longer follows
     m.handle_frames([{"ch": "sys.temp", "ts": 3, "v": 43.0}])
     m.follow.setChecked(True)
+    m.all_btn.click()  # show all: x spans every point and keeps growing, y fits
+    assert m.show_all and not m.follow.isChecked()
+    m.handle_frames([{"ch": "sys.temp", "ts": 4, "v": 50.0}])
+    m.plot.getViewBox().updateAutoRange()
+    (x0, x1), (y0, y1) = m.plot.getViewBox().viewRange()
+    xs = m.series["sys.temp"].getData()[0]
+    assert x0 <= xs.min() and x1 >= xs.max() and y1 >= 50.0
+    m.on_manual_range()  # zoom/pan with the mouse leaves both modes
+    assert not m.show_all and not m.follow.isChecked()
+    m.follow.setChecked(True)
     text = m.log.toPlainText()
     assert "STA down" in text and "debug noise" not in text  # default filter: info and above
     m.filter.setText("nomatch")

@@ -65,15 +65,20 @@ class MonitorTab(QWidget):
         for side in ("left", "bottom"):
             self.plot.getAxis(side).setTextPen("#333")
         self.plot.addLegend(offset=(10, 10), labelTextColor="#222", brush=(255, 255, 255, 200))
-        self.plot.getViewBox().sigRangeChangedManually.connect(lambda *_: self.follow.setChecked(False))
+        self.plot.getViewBox().sigRangeChangedManually.connect(self.on_manual_range)
         self.plot.scene().sigMouseMoved.connect(self.on_mouse)
         self.follow = QCheckBox(f"Follow last {WINDOW_S:.0f} s")
         self.follow.setChecked(True)
         self.follow.setToolTip("Untick by zooming or panning with the mouse; tick again to follow the newest data")
-        self.follow.toggled.connect(lambda on: on and self.plot.enableAutoRange(axis="y"))
+        self.follow.toggled.connect(self.on_follow)
+        self.show_all = False  # "Show all" mode: x spans all data and grows with it, y fits
+        self.all_btn = QPushButton("Show all")
+        self.all_btn.setToolTip("Reset the view: all data on x (keeps growing with new data), y fitted to it")
+        self.all_btn.clicked.connect(self.show_all_data)
         self.hover = QLabel("")
         pt = QHBoxLayout()
         pt.addWidget(self.follow)
+        pt.addWidget(self.all_btn)
         pt.addWidget(self.hover, 1)
         view = QWidget()
         pv = QVBoxLayout(view)
@@ -262,6 +267,23 @@ class MonitorTab(QWidget):
             # y follows the visible part only (auto-range over the whole buffer would include old data)
             self.plot.getViewBox().setAutoVisible(y=True)
             self.plot.enableAutoRange(axis="y")
+        elif self.show_all:
+            self.plot.enableAutoRange(axis="xy")
+
+    # ---- view modes: follow the last 30 s, show all, or free (after zoom/pan with the mouse) ----
+    def on_follow(self, on: bool) -> None:
+        if on:
+            self.show_all = False
+            self.plot.enableAutoRange(axis="y")
+
+    def show_all_data(self) -> None:
+        self.show_all = True
+        self.follow.setChecked(False)
+        self.plot.enableAutoRange(axis="xy")
+
+    def on_manual_range(self, *_) -> None:
+        self.show_all = False
+        self.follow.setChecked(False)
 
     def on_mouse(self, pos) -> None:
         """Values of every series at the time under the mouse."""

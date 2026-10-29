@@ -604,7 +604,8 @@ Implementation (milestone 5, `pc/devlink_pc/`, venv `pc/.venv`, `pc/requirements
   its old address (milestone 7, found by test 25).
 - Monitor tab (milestone 6; plots moved from Qt Charts to pyqtgraph in v0.11): channel table with subscribe + rate
   per channel and the latest value; plot that follows the last 30 s (arrays: one line per element), with mouse
-  zoom/pan (which stops following until "Follow" is ticked again), values under the cursor, and up to 20,000 points
+  zoom/pan (which stops following until "Follow" is ticked again), a "Show all" button (x spans all kept data and keeps
+  growing, y fits it, until the next zoom/pan), values under the cursor, and up to 20,000 points
   per series kept for zooming back (clipped and downsampled when drawn); log
   console (level and text filter, pause, save); status line from `/status` every 2 s. The WebSocket client
   (`stream.MonitorSession`) is Qt-free and reconnects after a reboot by finding the board again by MAC (its IP may
