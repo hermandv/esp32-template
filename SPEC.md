@@ -37,7 +37,8 @@ retained RTC (§7.3); Monitor tab with Qt Charts instead of pyqtgraph (§8).
 
 Changes in v0.11 (milestone 7, acceptance run): after configuring through the AP, the PC app waits for a status that
 confirms the new network instead of taking the first sighting (mDNS can still hold the old address) (§8); acceptance
-results in `test/ACCEPTANCE.md`, `README.md` added. No firmware, bootloader or partition change.
+results in `test/ACCEPTANCE.md`, `README.md` added; Monitor plots use pyqtgraph (faster with many points, zoom and
+mouse-over values; CR-6 from the HorseHealth project) (§8). No firmware, bootloader or partition change.
 
 ---
 
@@ -601,8 +602,10 @@ Implementation (milestone 5, `pc/devlink_pc/`, venv `pc/.venv`, `pc/requirements
 - After sending settings through the board AP, the PC rejoins its own network and waits until `/status` from the board
   reports the STA connected to the new SSID. A board that is merely seen is not enough, because mDNS may still hold
   its old address (milestone 7, found by test 25).
-- Monitor tab (milestone 6): Qt Charts (part of PySide6) instead of pyqtgraph, so no extra dependency. Channel table
-  with subscribe + rate per channel and the latest value; plot of the last 30 s (arrays: one line per element); log
+- Monitor tab (milestone 6; plots moved from Qt Charts to pyqtgraph in v0.11): channel table with subscribe + rate
+  per channel and the latest value; plot that follows the last 30 s (arrays: one line per element), with mouse
+  zoom/pan (which stops following until "Follow" is ticked again), values under the cursor, and up to 20,000 points
+  per series kept for zooming back (clipped and downsampled when drawn); log
   console (level and text filter, pause, save); status line from `/status` every 2 s. The WebSocket client
   (`stream.MonitorSession`) is Qt-free and reconnects after a reboot by finding the board again by MAC (its IP may
   change), then replays the subscriptions and rates.

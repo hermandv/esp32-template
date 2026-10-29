@@ -69,6 +69,13 @@ def test_monitor_tab(win):
                      {"ch": "log", "ts": 3100000, "lvl": "D", "tag": "x", "msg": "debug noise"}])
     assert m.table.item(m._row("sys.temp"), 4).text() == "41.5"
     assert set(m.series) == {"sys.temp", "example.adc[0]", "example.adc[1]", "example.adc[2]"}
+    x, y = m.series["example.adc[1]"].getData()
+    assert list(y) == [2.0] and len(x) == 1  # pyqtgraph curve holds the point
+    m.handle_frames([{"ch": "sys.temp", "ts": 2, "v": 42.0}])
+    assert list(m.series["sys.temp"].getData()[1]) == [41.5, 42.0]
+    m.follow.setChecked(False)  # zoomed/panned: the view no longer follows
+    m.handle_frames([{"ch": "sys.temp", "ts": 3, "v": 43.0}])
+    m.follow.setChecked(True)
     text = m.log.toPlainText()
     assert "STA down" in text and "debug noise" not in text  # default filter: info and above
     m.filter.setText("nomatch")
@@ -76,3 +83,13 @@ def test_monitor_tab(win):
     m.filter.setText("")
     m.level.setCurrentIndex(1)  # debug and above
     assert "debug noise" in m.log.toPlainText()
+
+
+def test_monitor_unsubscribe_removes_curves(win):
+    m = win.monitor
+    m.session = type("S", (), {"unsubscribe": lambda self, ch: None})()
+    m.handle_frames([{"ch": "example.adc", "ts": 1, "v": [1, 2]}, {"ch": "sys.temp", "ts": 1, "v": 40.0}])
+    assert len(m.plot.getPlotItem().listDataItems()) == 3
+    m.set_sub("example.adc", False)
+    assert set(m.series) == {"sys.temp"} and len(m.plot.getPlotItem().listDataItems()) == 1
+    m.session = None

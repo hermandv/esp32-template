@@ -1,14 +1,15 @@
-"""Monitor tab (SPEC §8.3): channel list from /channels, subscribe and set rates, live plots (last 30 s), readouts,
-log console with level/text filter and save, status bar with auto-reconnect after a reboot."""
+"""Monitor tab (SPEC §8.3): channel list from /channels, subscribe and set rates, live plots (pyqtgraph: follows the
+last 30 s, or zoom/pan freely with the mouse, values under the cursor), readouts, log console with level/text filter
+and save, status bar with auto-reconnect after a reboot."""
 
 from __future__ import annotations
 
 import time
 from collections import deque
 
-from PySide6.QtCharts import QChart, QChartView, QLineSeries, QValueAxis
-from PySide6.QtCore import QPointF, Qt, QTimer
-from PySide6.QtGui import QPainter
+import numpy as np
+import pyqtgraph as pg
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QFileDialog, QHBoxLayout, QHeaderView,
                                QLabel, QLineEdit, QPlainTextEdit, QPushButton, QSpinBox, QSplitter, QTableWidget,
                                QTableWidgetItem, QVBoxLayout, QWidget)
@@ -19,7 +20,7 @@ from ..stream import MonitorSession
 from . import workers
 
 WINDOW_S = 30.0
-MAX_POINTS = 4000
+MAX_POINTS = 20000  # per series; kept for zooming back (pyqtgraph clips and downsamples what is drawn)
 LEVELS = ["V", "D", "I", "W", "E"]
 
 
@@ -30,7 +31,7 @@ class MonitorTab(QWidget):
         self.session: MonitorSession | None = None
         self.channels: dict[str, dict] = {}
         self.points: dict[str, deque] = {}       # series name -> (t, v)
-        self.series: dict[str, QLineSeries] = {}
+        self.series: dict[str, pg.PlotDataItem] = {}
         self.log_lines: deque = deque(maxlen=20000)
         self.t0 = time.time()
 
@@ -57,16 +58,28 @@ class MonitorTab(QWidget):
         self.table.verticalHeader().setVisible(False)
 
         # -- plot --
-        self.chart = QChart()
-        self.chart.legend().setAlignment(Qt.AlignBottom)
-        self.ax_x = QValueAxis()
-        self.ax_x.setTitleText("s")
-        self.ax_y = QValueAxis()
-        self.chart.addAxis(self.ax_x, Qt.AlignBottom)
-        self.chart.addAxis(self.ax_y, Qt.AlignLeft)
-        view = QChartView(self.chart)
-        view.setRenderHint(QPainter.Antialiasing)
-        view.setMinimumHeight(220)
+        self.plot = pg.PlotWidget(background="w")
+        self.plot.setMinimumHeight(220)
+        self.plot.showGrid(x=True, y=True, alpha=0.3)
+        self.plot.setLabel("bottom", "s")
+        for side in ("left", "bottom"):
+            self.plot.getAxis(side).setTextPen("#333")
+        self.plot.addLegend(offset=(10, 10), labelTextColor="#222", brush=(255, 255, 255, 200))
+        self.plot.getViewBox().sigRangeChangedManually.connect(lambda *_: self.follow.setChecked(False))
+        self.plot.scene().sigMouseMoved.connect(self.on_mouse)
+        self.follow = QCheckBox(f"Follow last {WINDOW_S:.0f} s")
+        self.follow.setChecked(True)
+        self.follow.setToolTip("Untick by zooming or panning with the mouse; tick again to follow the newest data")
+        self.follow.toggled.connect(lambda on: on and self.plot.enableAutoRange(axis="y"))
+        self.hover = QLabel("")
+        pt = QHBoxLayout()
+        pt.addWidget(self.follow)
+        pt.addWidget(self.hover, 1)
+        view = QWidget()
+        pv = QVBoxLayout(view)
+        pv.setContentsMargins(0, 0, 0, 0)
+        pv.addWidget(self.plot, 1)
+        pv.addLayout(pt)
 
         # -- log --
         self.level = QComboBox()
@@ -194,7 +207,7 @@ class MonitorTab(QWidget):
         else:
             self.session.unsubscribe(name)
             for key in [k for k in self.series if k == name or k.startswith(name + "[")]:
-                self.chart.removeSeries(self.series.pop(key))
+                self.plot.removeItem(self.series.pop(key))
                 self.points.pop(key, None)
 
     # ---- frames ----
@@ -227,12 +240,11 @@ class MonitorTab(QWidget):
                 dq = self.points.setdefault(key, deque(maxlen=MAX_POINTS))
                 dq.append((now, float(x)))
                 if key not in self.series:
-                    s = QLineSeries()
-                    s.setName(key)
-                    self.chart.addSeries(s)
-                    s.attachAxis(self.ax_x)
-                    s.attachAxis(self.ax_y)
-                    self.series[key] = s
+                    pen = pg.mkPen(pg.intColor(len(self.series), hues=9, values=1, maxValue=200), width=1.5)
+                    curve = self.plot.plot(name=key, pen=pen)
+                    curve.setClipToView(True)
+                    curve.setDownsampling(auto=True, method="peak")
+                    self.series[key] = curve
         if new_log and not self.pause.isChecked():
             for lvl, line in new_log:
                 if self._log_ok(lvl, line):
@@ -240,17 +252,35 @@ class MonitorTab(QWidget):
         self.redraw(now)
 
     def redraw(self, now: float) -> None:
-        lo, hi = None, None
-        for key, s in self.series.items():
-            pts = [QPointF(t, v) for t, v in self.points.get(key, ()) if t >= now - WINDOW_S]
-            s.replace(pts)
-            for p in pts:
-                lo = p.y() if lo is None else min(lo, p.y())
-                hi = p.y() if hi is None else max(hi, p.y())
-        self.ax_x.setRange(max(0.0, now - WINDOW_S), max(WINDOW_S, now))
-        if lo is not None:
-            pad = (hi - lo) * 0.1 or 1.0
-            self.ax_y.setRange(lo - pad, hi + pad)
+        for key, curve in self.series.items():
+            pts = self.points.get(key)
+            if pts:
+                a = np.asarray(pts, dtype=float)
+                curve.setData(a[:, 0], a[:, 1])
+        if self.follow.isChecked():
+            self.plot.setXRange(max(0.0, now - WINDOW_S), max(WINDOW_S, now), padding=0)
+            # y follows the visible part only (auto-range over the whole buffer would include old data)
+            self.plot.getViewBox().setAutoVisible(y=True)
+            self.plot.enableAutoRange(axis="y")
+
+    def on_mouse(self, pos) -> None:
+        """Values of every series at the time under the mouse."""
+        vb = self.plot.getViewBox()
+        if not self.series or not vb.sceneBoundingRect().contains(pos):
+            self.hover.setText("")
+            return
+        t = vb.mapSceneToView(pos).x()
+        parts = [f"t = {t:.2f} s"]
+        for key in self.series:
+            pts = self.points.get(key)
+            if not pts:
+                continue
+            ts = np.fromiter((p[0] for p in pts), float, len(pts))
+            i = int(np.clip(np.searchsorted(ts, t), 0, len(ts) - 1))
+            if i > 0 and abs(ts[i - 1] - t) < abs(ts[i] - t):
+                i -= 1
+            parts.append(f"{key} = {pts[i][1]:.4g}")
+        self.hover.setText("   ".join(parts))
 
     # ---- log ----
     def _log_ok(self, lvl: str, line: str) -> bool:
