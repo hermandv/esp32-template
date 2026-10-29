@@ -33,7 +33,7 @@ Status values:
 | 14 | Button 3 s → AP; 10 s → recovery; power cycle in recovery → app | pass | `manual_m7.py m14_button`: on the board, 3 s hold → config AP on; 10 s hold → recovery (reason `requested`). The restart while BOOT/GPIO0 is still held does not land in download mode. Power cycle in recovery → app: `hil_m1.py m_power_cycle_in_recovery`; button logic: host test `test_button.c` |
 | 15 | Garbage in NVS → recovery and app Wi-Fi config still work | pass | acc `a15_nvs_garbage` (24 KB of random bytes over `nvs`; app and recovery both back on 10X) |
 | 16 | dlcfg power cut during writes → previous config valid | pass | `hil_m1.py m_dlcfg_power_cut` (manual power cuts during continuous writes) + `t_dlcfg_persists`; host tests `test_dlcfg.c` (torn A/B records) |
-| 16a | Improv from the PC app and from ESP Web Tools | _partial_ | PC app: `hil_m5_pc.py p_usb_configure`; ESP Web Tools: _manual_ |
+| 16a | Improv from the PC app and from ESP Web Tools | partial | PC app: `hil_m5_pc.py p_usb_configure` passed. ESP Web Tools was not run in milestone 7 (skipped on 2026-10-29). To run it, open improv-wifi.com in Chrome or Edge, choose "Connect device to Wi-Fi" and pick the board's COM port; the board speaks the same Improv serial protocol the PC app uses |
 | 17 | Both app slots erased → recovery, accepts an app | pass | `hil_m1.py t_slots_erased`, `hil_m2.py` |
 | 18 | One byte corrupted in the active slot → fallback | pass | `hil_m1.py t_slot_corrupt` |
 | 19 | Supply at the brownout edge → recovery comes up, accepts OTA | not run | Needs an adjustable supply; the bench board is USB-powered. Reduced TX power in recovery (`CONFIG_DEVLINK_TX_POWER_BROWNOUT_DBM`) is in place but untested. |
@@ -56,4 +56,8 @@ Status values:
 - **Manual script, first run.** Two script bugs stopped the first run of `manual_m7.py`: Wi-Fi state was read from
   `devlink info` instead of `devlink status`, and the USB port was opened twice. The 10/50/99 % power cuts in that run
   passed and are kept. The other parts were re-run after the fix and passed.
-- **Not covered:** test 19 (brownout). It needs an adjustable supply.
+- **Not covered:**
+  - Test 19 (brownout). It needs an adjustable supply.
+  - The ESP Web Tools half of test 16a. It was skipped.
+- **After the run:** dlcfg was erased, so the board is AP-only (`ESP32S3-CFG-F25030`, no label) with bootlab in ota_0
+  and recovery 0.6.0-m6 in factory.
