@@ -66,16 +66,25 @@ def configure_via_ap(ap_ssid: str, ssid: str, password: str, label: str = "", ke
             wifi_win.connect(before.profile)
 
     say("waiting for the board on the LAN")
-    seen = find_by_mac(mac, timeout=lan_wait_s, mdns=mdns)
+    # mDNS may still hold the board's old address, so a sighting alone proves nothing: wait for a status that says
+    # the STA is connected to the new network.
+    end = time.time() + lan_wait_s
+    seen = None
+    while time.time() < end:
+        seen = find_by_mac(mac, timeout=max(1.0, min(5.0, end - time.time())), mdns=mdns)
+        if seen is None:
+            continue
+        try:
+            st = DeviceApi(seen.ip, mac, key, timeout=3).status()
+            if st["wifi"]["sta_connected"] and st["wifi"]["ssid"] == ssid:
+                return ConfigureResult(True, mac, seen.ip, f"on the LAN at {seen.ip}")
+        except (requests.RequestException, ApiError, KeyError):
+            pass
+        time.sleep(1)
     if seen is None:
         return ConfigureResult(False, mac, "", f"settings saved, but the board did not appear on this network within "
                                                f"{lan_wait_s:.0f} s (wrong password, other subnet, or client isolation)")
-    try:
-        st = DeviceApi(seen.ip, mac, key).status()
-        ok = st["wifi"]["sta_connected"] and st["wifi"]["ssid"] == ssid
-    except (requests.RequestException, ApiError, KeyError):
-        ok = False
-    return ConfigureResult(ok, mac, seen.ip, f"on the LAN at {seen.ip}" if ok else "seen, but status unclear")
+    return ConfigureResult(False, mac, seen.ip, "seen, but status unclear")
 
 
 def configure_via_usb(port: str, ssid: str, password: str, label: str = "", key: str = "devlink-bench",

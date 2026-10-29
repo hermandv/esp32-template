@@ -1,6 +1,6 @@
 # ESP32-S3 Bench Template (devlink)
 
-The design lives in `SPEC.md` (v0.10). Read it before changing anything; it is the source of truth.
+The design lives in `SPEC.md` (v0.11). Read it before changing anything; it is the source of truth.
 `SPEC_v0.2.md` is an old version kept for reference only.
 
 ## Ground rules
@@ -39,6 +39,8 @@ The design lives in `SPEC.md` (v0.10). Read it before changing anything; it is t
 | HIL PC-app tests (milestone 5; asks the 10X password) | `pc\.venv\Scripts\python test/hil/hil_m5_pc.py --mac 7c:df:a1:f2:50:30 --ssid 10X --home 10X` |
 | Recovery variants for milestone 6 | `idf.py -C recovery -B build/recovery_v2 -DDEVLINK_EXTRA_DEFAULTS=<repo>/test/fw/recovery_v2.defaults build` (and `recovery_crash`) |
 | HIL Monitor + recovery update (milestone 6, via the app AP) | `powershell -File test/hil/run_via_ap.ps1 -Mac 7c:df:a1:f2:50:30 -HomeSsid 10X -Target app -Script hil_m6_net.py` |
+| Acceptance run (milestone 7; LAN, asks the 10X password; tests 2 and 3 take ~20 min and 1 h) | `pc\.venv\Scripts\python -u test/hil/acceptance.py --mac 7c:df:a1:f2:50:30 --ssid 10X --home 10X [test ...]` (test 13 needs the IDF hello_world example in `build/hello_world`; see the script) |
+| Hands-on acceptance tests 8, 12, 14 (dialogs say what to do) | `pc\.venv\Scripts\python -u test/hil/manual_m7.py --mac 7c:df:a1:f2:50:30 [test ...]` |
 
 Board console over USB: `devlink info|status|restart|recovery|label <text>` and Improv Wi-Fi serial. Test builds add
 the HIL test console (`info`, `restart`, `crash`, `mode ...`, ...).
@@ -53,6 +55,8 @@ in its build directory; never commit an `sdkconfig` in a project folder.
 - No switchable USB power: when a test needs real power cycles, stop and ask the user to unplug/replug, saying how many
   and how fast, and wait for them to confirm. An RTS/esptool reset is not a power cycle.
 
-## Layout (planned, SPEC §5.1)
+## Layout (SPEC §5.1)
+Acceptance results: `test/ACCEPTANCE.md`. User-facing overview: `README.md`.
+
 bootloader_components/devlink_boot, components/devlink, components/devlink_sysmon, components/mod_<ic>,
 recovery/, app/, pc/, tools/

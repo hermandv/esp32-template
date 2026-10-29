@@ -10,6 +10,9 @@
 
 #include "devlink.h"
 #include "esp_app_desc.h"
+#include "esp_efuse.h"
+#include "esp_efuse_table.h"
+#include "esp_flash.h"
 #include "esp_log.h"
 #include "esp_partition.h"
 #include "esp_sleep.h"
@@ -134,6 +137,25 @@ static void handle(char *line)
         printf("DLT ok cfg_label %s seq=%" PRIu32 "\n", esp_err_to_name(dlcfg_save(&cfg)), dlcfg_sequence());
     } else if (strcmp(line, "cfg_stress") == 0) {
         cfg_stress();
+    } else if (strcmp(line, "danger_bootloader") == 0) {
+        /* Test 26: a test module writing the bootloader region must be stopped (DANGEROUS_WRITE_ABORTS). */
+        static const uint8_t junk[4] = {0, 0, 0, 0};
+        printf("DLT ok danger_bootloader: writing 0x1000 now\n");
+        fflush(stdout);
+        vTaskDelay(pdMS_TO_TICKS(50));
+        esp_err_t err = esp_flash_write(NULL, junk, 0x1000, sizeof(junk));
+        printf("DLT err danger_bootloader NOT stopped: %s\n", esp_err_to_name(err)); /* never reached */
+    } else if (strcmp(line, "efuse_burn") == 0) {
+        /* Test 26: an eFuse "burn" from a test module only changes the virtual copy (CONFIG_EFUSE_VIRTUAL). */
+        uint8_t v = 0xA5;
+        uint8_t back = 0;
+        esp_err_t err = esp_efuse_write_field_blob(ESP_EFUSE_USER_DATA, &v, 8);
+        (void)esp_efuse_read_field_blob(ESP_EFUSE_USER_DATA, &back, 8);
+        printf("DLT ok efuse_burn write=%s read_back=0x%02X\n", esp_err_to_name(err), back);
+    } else if (strcmp(line, "efuse_read") == 0) {
+        uint8_t back = 0;
+        (void)esp_efuse_read_field_blob(ESP_EFUSE_USER_DATA, &back, 8);
+        printf("DLT ok efuse_read user_data0=0x%02X\n", back);
     } else if ((s_extra != NULL) && s_extra(line, arg)) {
         /* handled by the image */
     } else if (line[0] != '\0') {

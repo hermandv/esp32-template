@@ -1,4 +1,4 @@
-# ESP32-S3 Bench Template – Specification (v0.10 draft)
+# ESP32-S3 Bench Template – Specification (v0.11)
 
 A reusable firmware + PC tool template for bringing up and testing ESP32-S3 hardware boards over Wi-Fi.
 Working name for the shared firmware layer: **devlink**.
@@ -34,6 +34,10 @@ OTA uploads are refused with 411 (§7.1); PC app implementation notes (§8).
 
 Changes in v0.10 (milestone 6): recovery update + self-test implemented with the self-test state in dlcfg instead of
 retained RTC (§7.3); Monitor tab with Qt Charts instead of pyqtgraph (§8).
+
+Changes in v0.11 (milestone 7, acceptance run): after configuring through the AP, the PC app waits for a status that
+confirms the new network instead of taking the first sighting (mDNS can still hold the old address) (§8); acceptance
+results in `test/ACCEPTANCE.md`, `README.md` added. No firmware, bootloader or partition change.
 
 ---
 
@@ -594,6 +598,9 @@ Implementation (milestone 5, `pc/devlink_pc/`, venv `pc/.venv`, `pc/requirements
 - The configure flow forces a Windows Wi-Fi scan (WlanScan) before joining/rejoining an AP; netsh output is parsed in
   English.
 - The bench Wi-Fi password is never stored; the configure dialog asks for it each time.
+- After sending settings through the board AP, the PC rejoins its own network and waits until `/status` from the board
+  reports the STA connected to the new SSID. A board that is merely seen is not enough, because mDNS may still hold
+  its old address (milestone 7, found by test 25).
 - Monitor tab (milestone 6): Qt Charts (part of PySide6) instead of pyqtgraph, so no extra dependency. Channel table
   with subscribe + rate per channel and the latest value; plot of the last 30 s (arrays: one line per element); log
   console (level and text filter, pause, save); status line from `/status` every 2 s. The WebSocket client
