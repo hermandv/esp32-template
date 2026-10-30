@@ -3,6 +3,7 @@ USB-UART bridge."""
 
 from __future__ import annotations
 
+import re
 import time
 from dataclasses import dataclass
 
@@ -56,7 +57,8 @@ class UsbBoard:
     firmware: str = ""
     version: str = ""
     chip: str = ""
-    name: str = ""
+    name: str = ""          # the board's label, or its hostname when it has none (Improv device name)
+    label: str = ""         # the label only: empty when the name is the hostname (prefill for "friendly name")
 
 
 class ImprovPort:
@@ -148,5 +150,6 @@ def find_boards(probe_timeout: float = 2.0) -> list[UsbBoard]:
         except (serial.SerialException, OSError):
             continue
         if s and len(s) >= 4:
-            out.append(UsbBoard(p.device, p.serial_number or "", s[0], s[1], s[2], s[3]))
+            label = "" if re.fullmatch(r"esp-[0-9a-f]{6}", s[3]) else s[3]  # devlink hostname = no label set
+            out.append(UsbBoard(p.device, p.serial_number or "", s[0], s[1], s[2], s[3], label))
     return out
