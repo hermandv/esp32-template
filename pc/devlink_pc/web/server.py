@@ -26,7 +26,7 @@ from pathlib import Path
 import requests
 from flask import Flask, Response, abort, jsonify, request, send_from_directory
 
-from .. import __version__, configure, discovery, image, improv, ota, wifi_win
+from .. import __version__, configure, discovery, image, improv, ota, usbflash, wifi_win
 from ..api import ApiError, DeviceApi
 from ..devices import HIGHLIGHT, Row, discover_all, merge_aps, merge_seen
 from ..settings import Settings, data_dir
@@ -48,6 +48,7 @@ class Job:
         self.log: list[str] = []
         self.boards: dict[str, dict] = {}
         self.result = None
+        self.cancel = threading.Event()  # set by POST /api/jobs/<id>/cancel (jobs that support it)
         self._last_push = 0.0
 
     def snapshot(self) -> dict:
@@ -358,6 +359,84 @@ def create_app(hub: Hub) -> Flask:
             return dataclasses.asdict(res)
 
         return jsonify(hub.run_job("configure", f"Configure {port} via USB", work).snapshot())
+
+    # ---- program a blank board over USB (SPEC §3.8): builds, board check, program ----
+    def _build(path: str) -> usbflash.Build:
+        b = usbflash.load_build(Path(path)) if path else None
+        if b is None:
+            abort(400, description=f"not a build directory: {path}")
+        return b
+
+    def _fw_json(fw: usbflash.Firmware) -> dict:
+        return {"summary": fw.summary, "errors": fw.errors, "warnings": fw.warnings, "flash_size": fw.flash_size}
+
+    @app.get("/api/usb/ports")
+    def usb_ports():
+        return jsonify([{"port": p, "desc": d} for p, d in usbflash.usb_ports()])
+
+    @app.post("/api/usb/builds")
+    def usb_builds():
+        b = request.get_json(force=True) or {}
+        folder = (b.get("folder") or "").strip() or hub.s.usb_build_dir or usbflash.default_build_dir()
+        builds = usbflash.scan_builds(folder) if folder else []
+        return jsonify({"folder": folder, "builds": [{"dir": str(x.dir), "name": x.dir.name, "label": x.label,
+                                                      "kind": x.kind} for x in builds]})
+
+    @app.post("/api/usb/firmware")
+    def usb_firmware():
+        b = request.get_json(force=True) or {}
+        return jsonify(_fw_json(usbflash.make_firmware(_build(b.get("recovery", "")), _build(b.get("app", "")))))
+
+    @app.post("/api/usb/check")
+    def usb_check():
+        """Job: what is on the port (console + esptool), checked against the picked builds. Nothing is written."""
+        b = request.get_json(force=True) or {}
+        port = b.get("port", "")
+        fw = usbflash.make_firmware(_build(b.get("recovery", "")), _build(b.get("app", "")))
+        if not port:
+            return _err(400, "port is needed")
+
+        def work(job: Job):
+            bc = usbflash.probe_board(port, job.say)
+            usbflash.check_board(fw, bc)
+            return {**dataclasses.asdict(bc), "summary": bc.summary}
+
+        return jsonify(hub.run_job("usbcheck", f"Check the board on {port}", work).snapshot())
+
+    @app.post("/api/usb/program")
+    def usb_program():
+        """Job: erase and program (after the page showed the check and the user confirmed). Cancel: /api/jobs/<id>/cancel."""
+        b = request.get_json(force=True) or {}
+        port, label, ssid, pw = b.get("port", ""), b.get("label", "").strip(), b.get("ssid", "").strip(), b.get("password", "")
+        fw = usbflash.make_firmware(_build(b.get("recovery", "")), _build(b.get("app", "")))
+        if not port:
+            return _err(400, "port is needed")
+        if fw.errors:
+            return _err(400, "; ".join(fw.errors))
+        hub.s.usb_build_dir = (b.get("folder") or "").strip() or str(fw.recovery.dir.parent)
+        if ssid:
+            hub.s.bench_ssid = ssid
+        hub.s.save()
+
+        def work(job: Job):
+            info = usbflash.program(port, fw, job.say, label=label, cancel=job.cancel)
+            if ssid:
+                info["url"] = usbflash.set_wifi(port, ssid, pw, job.say)
+            job.say(f"DONE: {info.get('label') or info.get('id')} ({info.get('mac')})"
+                    + (f" at {info['url']}" if info.get("url") else "; set Wi-Fi with Configure via USB"))
+            hub.note(f"programmed {info.get('mac')} on {port}: {fw.summary}")
+            return {"ok": True, "mac": info.get("mac"), "label": info.get("label"), "url": info.get("url")}
+
+        return jsonify(hub.run_job("program", f"Program the board on {port}", work).snapshot())  # password not kept
+
+    @app.post("/api/jobs/<int:job_id>/cancel")
+    def cancel_job(job_id: int):
+        job = hub.jobs.get(job_id)
+        if job is None:
+            return _err(404, "no such job")
+        job.cancel.set()
+        job.say("cancelling…")
+        return jsonify(job.snapshot())
 
     # ---- one board ----
     def done(what: str, mac: str, res):

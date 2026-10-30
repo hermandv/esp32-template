@@ -2,6 +2,7 @@
 calls that would reach a board are replaced."""
 
 import json
+import threading
 import time
 from pathlib import Path
 
@@ -129,3 +130,43 @@ def test_firmware_upload_rejects_garbage(client):
     assert r["info"]["errors"]
     assert client.post("/api/firmware/update", headers=H, json={"token": r["token"], "macs": ["7C:DF:A1:F2:50:30"]}
                        ).status_code == 400
+
+
+def test_usb_program_routes(hub, client, monkeypatch):
+    from devlink_pc import usbflash
+    if not all((ROOT / "build" / n / "flasher_args.json").is_file() for n in ("recovery", "app")):
+        pytest.skip("build/recovery and build/app not built")
+    monkeypatch.setattr(usbflash, "usb_ports", lambda: [("COM77", "COM77: USB JTAG/serial debug unit")])
+    assert client.get("/api/usb/ports").get_json() == [{"port": "COM77", "desc": "COM77: USB JTAG/serial debug unit"}]
+    r = client.post("/api/usb/builds", headers=H, json={"folder": str(ROOT / "build")}).get_json()
+    by = {b["name"]: b for b in r["builds"]}
+    assert by["recovery"]["kind"] == "recovery" and by["app"]["kind"] == "app"
+    rec, app = by["recovery"]["dir"], by["app"]["dir"]
+    fw = client.post("/api/usb/firmware", headers=H, json={"recovery": rec, "app": app}).get_json()
+    assert not fw["errors"] and fw["flash_size"] == "8MB"
+    bad = client.post("/api/usb/firmware", headers=H, json={"recovery": app, "app": rec}).get_json()
+    assert bad["errors"]
+    assert client.post("/api/usb/firmware", headers=H, json={"recovery": "C:/nope", "app": app}).status_code == 400
+    assert client.post("/api/usb/program", headers=H, json={"port": "COM77", "recovery": app, "app": rec}
+                       ).status_code == 400                                   # wrong picks: nothing starts
+
+    monkeypatch.setattr(usbflash, "probe_board", lambda port, log: usbflash.BoardCheck(port, "ESP32-S3", "7C:DF:A1:F2:50:30", "4MB"))
+    job = wait_job(hub, client.post("/api/usb/check", headers=H, json={"port": "COM77", "recovery": rec, "app": app}
+                                    ).get_json()["id"])
+    assert job.state == "done" and any("the board has 4MB" in e for e in job.result["errors"])
+
+    started = threading.Event()
+
+    def fake_program(port, fw, log, label="", cancel=None):
+        started.set()
+        cancel.wait(5)
+        raise usbflash.Cancelled("cancelled")
+
+    monkeypatch.setattr(usbflash, "program", fake_program)
+    j = client.post("/api/usb/program", headers=H, json={"port": "COM77", "recovery": rec, "app": app,
+                                                         "ssid": "10X", "password": "s3cret"}).get_json()
+    assert started.wait(5)
+    client.post(f"/api/jobs/{j['id']}/cancel", headers=H, json={})
+    job = wait_job(hub, j["id"])
+    assert job.state == "failed" and "cancelled" in job.log[-1]
+    assert "s3cret" not in json.dumps(client.get("/api/state").get_json())

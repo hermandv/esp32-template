@@ -47,6 +47,7 @@
               <button class="btn btn-sm" id="refreshBtn"><i class="ti ti-refresh me-1"></i>Refresh</button>
               <button class="btn btn-sm" id="addIpBtn"><i class="ti ti-plus me-1"></i>Add by IP</button>
               <button class="btn btn-sm" id="usbBtn"><i class="ti ti-usb me-1"></i>Configure via USB</button>
+              <button class="btn btn-sm" id="progBtn" title="First flash over USB: erases everything, writes bootloader, recovery and app"><i class="ti ti-cpu me-1"></i>Program blank board</button>
             </div>
           </div>
           <div class="table-responsive">
@@ -242,6 +243,37 @@
       <div class="modal-header"><h5 class="modal-title">Boards on USB</h5><button class="btn-close" data-bs-dismiss="modal"></button></div>
       <div class="list-group list-group-flush" id="usbList"></div>
       <div class="modal-body" id="usbMsg">Looking for boards that answer Improv…</div>
+    </div>
+  </div>
+</div>
+
+<div class="modal" id="progModal" tabindex="-1" data-bs-backdrop="static">
+  <div class="modal-dialog modal-lg modal-dialog-centered">
+    <div class="modal-content">
+      <div class="modal-header"><h5 class="modal-title">Program blank board (USB)</h5><button class="btn-close" id="progX"></button></div>
+      <div class="modal-body">
+        <p class="text-secondary small">The whole flash is erased: use this for new boards, or to re-flash a board completely (its Wi-Fi settings and label are lost). For normal updates use the Firmware page.</p>
+        <div class="row g-2 mb-2">
+          <div class="col-md-6"><label class="form-label">USB port</label>
+            <div class="input-group"><select class="form-select" id="progPort"></select><button class="btn" id="progPorts" title="Refresh"><i class="ti ti-refresh"></i></button></div></div>
+          <div class="col-md-6"><label class="form-label">Build folder (on this PC)</label>
+            <div class="input-group"><input class="form-control" id="progFolder" autocomplete="off"><button class="btn" id="progScan" title="Look for builds"><i class="ti ti-folder-search"></i></button></div></div>
+          <div class="col-md-6"><label class="form-label">Recovery build</label><select class="form-select" id="progRec"></select></div>
+          <div class="col-md-6"><label class="form-label">App build (ota_0)</label><select class="form-select" id="progApp"></select></div>
+        </div>
+        <div class="small mb-2" id="progFw"></div>
+        <div class="row g-2">
+          <div class="col-md-4"><label class="form-label">Board label</label><input class="form-control" id="progLabel" maxlength="32" placeholder="optional"></div>
+          <div class="col-md-4"><label class="form-label">Wi-Fi SSID</label><input class="form-control" id="progSsid" autocomplete="off" placeholder="empty = set Wi-Fi later"></div>
+          <div class="col-md-4"><label class="form-label">Wi-Fi password</label><input class="form-control" id="progPw" type="password" autocomplete="off" placeholder="not stored"></div>
+        </div>
+        <div class="alert mt-3 mb-0" id="progBoard" hidden></div>
+        <pre class="log-box mt-3 mb-0" id="progLog" hidden></pre>
+      </div>
+      <div class="modal-footer">
+        <button class="btn" id="progClose">Close</button>
+        <button class="btn btn-primary" id="progGo">Check board…</button>
+      </div>
     </div>
   </div>
 </div>

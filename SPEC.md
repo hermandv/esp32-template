@@ -664,6 +664,11 @@ http://127.0.0.1:8470/) and opens the page in the browser; the Qt app stays avai
 - Firmware files: a path on this PC (remembered in the recent list) or a browser upload (kept under the data folder).
 - Plot: a tooltip at the mouse shows the time and each series' nearest sample, with a dot on each curve (looked up per
   series, since the aligned plot data has gaps where the other series have samples).
+- Block channels (milestone 8): the page reads binary messages itself (`binaryType` arraybuffer, decoder in
+  `app.js`), plots one curve per field (30 s per field kept) and shows the received rate and lost blocks.
+- Program blank board (milestone 8, §3.8): `/api/usb/ports`, `/api/usb/builds`, `/api/usb/firmware`, then a
+  `usbcheck` job (nothing written; the page shows the board and asks to confirm) and a `program` job, which
+  `POST /api/jobs/<id>/cancel` stops. The build folder is a path on the server PC; the password is not kept.
 
 Implementation (milestone 5, `pc/devlink_pc/`, venv `pc/.venv`, `pc/requirements.txt`, run `pc/.venv/Scripts/python pc/devlink.py`):
 - A Qt-free library (`image`, `api`, `discovery`, `ota`, `improv`, `wifi_win`, `configure`) used by the GUI and by

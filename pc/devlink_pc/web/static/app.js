@@ -237,6 +237,127 @@ $("usbBtn").onclick = async () => {
   };
 };
 
+// Program blank board (USB): pick port and builds -> check the board (nothing written) -> confirm -> program.
+const Prog = {
+  stage: "check",   // check -> confirm -> running
+  jobId: null,
+  builds: [],
+
+  async open() {
+    $("progLog").hidden = true; $("progLog").textContent = ""; $("progBoard").hidden = true;
+    $("progPw").value = ""; $("progSsid").value = S.settings.bench_ssid || "";
+    this.setStage("check");
+    modal("progModal").show();
+    await Promise.all([this.loadPorts(), this.loadBuilds("")]);
+  },
+
+  async loadPorts() {
+    const ports = await attempt("USB ports", () => api("/api/usb/ports")) || [];
+    $("progPort").innerHTML = ports.length ? ports.map((p) => `<option value="${esc(p.port)}">${esc(p.desc)}</option>`).join("")
+      : `<option value="">no USB-serial port found</option>`;
+    this.setStage("check");
+  },
+
+  async loadBuilds(folder) {
+    const r = await attempt("builds", () => api("/api/usb/builds", {body: {folder}}));
+    if (!r) return;
+    $("progFolder").value = r.folder;
+    this.builds = r.builds;
+    const opts = (kind) => [...r.builds].sort((a, b) => (a.kind !== kind) - (b.kind !== kind) || a.name.localeCompare(b.name))
+      .map((b) => `<option value="${esc(b.dir)}">${esc(b.label)}</option>`).join("");
+    $("progRec").innerHTML = opts("recovery");
+    $("progApp").innerHTML = opts("app");
+    const app = r.builds.find((b) => b.name === "app") || r.builds.find((b) => b.kind === "app");
+    if (app) $("progApp").value = app.dir;
+    await this.checkFw();
+  },
+
+  async checkFw() {
+    this.setStage("check");
+    this.fw = null;
+    if (!$("progRec").value || !$("progApp").value) {
+      $("progFw").innerHTML = `<span class="text-danger">No builds in this folder (each needs flasher_args.json).</span>`;
+      return;
+    }
+    const fw = await attempt("builds", () => api("/api/usb/firmware", {body: this.picks()}));
+    if (!fw) return;
+    this.fw = fw;
+    $("progFw").innerHTML = esc(fw.summary) + fw.errors.map((e) => `<div class="text-danger">${esc(e)}</div>`).join("")
+      + fw.warnings.map((w) => `<div class="text-warning">${esc(w)}</div>`).join("");
+  },
+
+  picks() { return {recovery: $("progRec").value, app: $("progApp").value, folder: $("progFolder").value.trim()}; },
+
+  setStage(stage) {
+    this.stage = stage;
+    const go = $("progGo");
+    go.disabled = stage === "running";
+    go.className = `btn ${stage === "confirm" ? "btn-danger" : "btn-primary"}`;
+    go.textContent = stage === "confirm" ? "Erase ALL flash and program" : stage === "running" ? "Programming…" : "Check board…";
+    $("progClose").textContent = stage === "running" ? "Cancel" : "Close";
+    if (stage === "check") $("progBoard").hidden = true;
+  },
+
+  async go() {
+    const port = $("progPort").value;
+    if (!port || this.stage === "running") return;
+    if (!this.fw || this.fw.errors.length) { toast("Pick a recovery and an app build without errors first", "warning"); return; }
+    $("progLog").hidden = false;
+    if (this.stage === "check") {
+      const job = await attempt("check", () => api("/api/usb/check", {body: {port, ...this.picks()}}));
+      if (job) { this.jobId = job.id; this.setStage("running"); this.onJob(job); }
+      return;
+    }
+    const body = {port, ...this.picks(), label: $("progLabel").value.trim(), ssid: $("progSsid").value.trim(), password: $("progPw").value};
+    const job = await attempt("program", () => api("/api/usb/program", {body}));
+    $("progPw").value = "";
+    if (job) { this.jobId = job.id; this.setStage("running"); this.onJob(job); }
+  },
+
+  onJob(job) {
+    $("progLog").textContent = job.log.join("\n");
+    $("progLog").scrollTop = $("progLog").scrollHeight;
+    if (job.state === "running" || job._handled) return;
+    job._handled = true;
+    if (job.kind === "usbcheck") {
+      const bc = job.result;
+      if (!bc) { this.setStage("check"); return; }
+      const box = $("progBoard");
+      box.className = `alert mt-3 mb-0 ${bc.errors.length ? "alert-danger" : "alert-warning"}`;
+      box.innerHTML = `<div class="fw-medium">Board on ${esc(bc.port)}: ${esc(bc.summary)}</div>`
+        + bc.errors.map((e) => `<div>Not possible: ${esc(e)}</div>`).join("")
+        + bc.warnings.map((w) => `<div>${esc(w)}</div>`).join("")
+        + (bc.errors.length ? "" : `<div class="mt-1">Erase ALL flash of this board and write ${esc(this.fw.summary)}?</div>`);
+      this.setStage(bc.errors.length ? "check" : "confirm");
+      box.hidden = false;  // after setStage: "check" hides it
+    } else {
+      this.setStage("check");
+      const r = job.result;
+      if (r && r.ok) toast(`Programmed ${r.label || r.mac}${r.url ? " · " + r.url : ""}`, "success");
+      else toast(`Program: ${job.state === "failed" ? (job.log[job.log.length - 1] || "failed") : "stopped"}`, "warning");
+    }
+  },
+
+  async close() {
+    if (this.stage !== "running") { modal("progModal").hide(); return; }
+    const job = S.jobs.get(this.jobId);
+    if (job && job.kind === "usbcheck") return;  // a few seconds; nothing written
+    const r = await ask({title: "Cancel programming", text: "Stop programming? A board stopped while it is being written does not start until it is programmed again.", ok: "Stop", danger: true});
+    if (r) await attempt("cancel", () => api(`/api/jobs/${this.jobId}/cancel`, {body: {}}));
+  },
+};
+
+$("progBtn").onclick = () => Prog.open();
+$("progGo").onclick = () => Prog.go();
+$("progClose").onclick = () => Prog.close();
+$("progX").onclick = () => Prog.close();
+$("progPorts").onclick = () => Prog.loadPorts();
+$("progScan").onclick = () => Prog.loadBuilds($("progFolder").value.trim());
+$("progFolder").onkeydown = (e) => { if (e.key === "Enter") Prog.loadBuilds($("progFolder").value.trim()); };
+$("progRec").onchange = () => Prog.checkFw();
+$("progApp").onchange = () => Prog.checkFw();
+$("progPort").onchange = () => Prog.setStage("check");
+
 $("nameBtn").onclick = async () => {
   const d = selectedDevice();
   if (!d) return;
@@ -306,6 +427,7 @@ function onJob(job) {
     }
   }
   if (job.kind === "ota" && (job.id === S.fw.jobId || S.fw.jobId === null)) Fw.showJob(job);
+  if (job.id === Prog.jobId) Prog.onJob(job);
 }
 
 // ---------------------------------------------------------------- Firmware
@@ -425,6 +547,34 @@ $("fwStart").onclick = () => Fw.start();
 const LEVELS = ["V", "D", "I", "W", "E"];
 const WINDOW_S = 30;
 const MAX_POINTS = 20000;
+const MAX_BLOCK_POINTS = 30000;  // per block-channel field: 30 s at 1 kHz
+
+/** One binary WebSocket message of a block channel (SPEC §5.7; layout as dl_stream_core.h DL_BLOCK_*), or null. */
+function decodeBlock(buf) {
+  const d = new DataView(buf);
+  if (buf.byteLength < 28 || d.getUint16(0, true) !== 0xB10C || d.getUint8(2) !== 1) return null;
+  const type = d.getUint8(3), nf = d.getUint8(6), ns = d.getUint16(24, true), hlen = d.getUint16(26, true);
+  const size = type === 0 ? 2 : 4;
+  if (type > 2 || nf === 0 || hlen !== 28 + 4 * nf || buf.byteLength !== hlen + ns * nf * size) return null;
+  const scale = [];
+  for (let f = 0; f < nf; f++) scale.push(d.getFloat32(28 + 4 * f, true));
+  const get = type === 0 ? (o) => d.getInt16(o, true) : type === 1 ? (o) => d.getInt32(o, true) : (o) => d.getFloat32(o, true);
+  const values = [];  // values[field][sample]
+  for (let f = 0; f < nf; f++) {
+    const col = new Array(ns);
+    for (let i = 0; i < ns; i++) col[i] = get(hlen + (i * nf + f) * size) * scale[f];
+    values.push(col);
+  }
+  return {id: d.getUint16(4, true), flags: d.getUint8(7), seq: d.getUint32(8, true),
+    t0_us: Number(d.getBigUint64(12, true)), period_ns: d.getUint32(20, true), values};
+}
+
+/** Field names of a block channel from /channels: a list, or a comma string (older boards). */
+function blockFields(c) {
+  const f = Array.isArray(c.fields) ? c.fields : String(c.fields || "").split(",").filter((x) => x);
+  const n = c.n_fields || f.length || 1;
+  return f.length === n ? f : Array.from({length: n}, (_, i) => `f${i}`);
+}
 
 const Mon = {
   sess: null,            // {mac, ip, ws, closed, state, offset}
@@ -432,6 +582,7 @@ const Mon = {
   subs: new Map(),       // channel -> rate
   points: new Map(),     // series key -> {t: [], v: []}
   values: new Map(),     // channel -> latest value
+  bstat: new Map(),      // block channel -> {n: samples since the last rate update, rate, lost, last: seq}
   logLines: [],
   mode: "follow",        // follow / all / free
   t0: performance.now(),
@@ -463,7 +614,8 @@ const Mon = {
     if (!ch) { this.setState("not connected"); return; }
     this.channels = (ch.channels || []).filter((c) => c.name !== "log");
     this.subs = new Map([["log", null]]);
-    this.points.clear(); this.values.clear(); this.logLines = []; $("logBox").textContent = "";
+    this.points.clear(); this.values.clear(); this.bstat.clear(); this.logLines = []; $("logBox").textContent = "";
+    this.blockById = new Map(this.channels.filter((c) => c.type === "block").map((c) => [c.id, c]));
     this.t0 = performance.now();
     this.mode = "follow"; this.markMode();
     this.renderChannels();
@@ -493,12 +645,14 @@ const Mon = {
     if (!s || s.closed) return;
     let hello = false;
     const ws = new WebSocket(`ws://${s.ip}/ws`);
+    ws.binaryType = "arraybuffer";  // block channels
     s.ws = ws;
     s.lastRx = performance.now();
     s.probeAt = null;
     ws.onmessage = (ev) => {
       s.lastRx = performance.now();
       s.probeAt = null;
+      if (ev.data instanceof ArrayBuffer) { this.block(ev.data); return; }
       for (const line of String(ev.data).split("\n")) {
         if (!line.trim()) continue;
         let f;
@@ -507,6 +661,7 @@ const Mon = {
           hello = true;
           if (f.error === "too_many_clients") { s.state = "refused"; this.setState("refused: the board already has 2 clients", "red"); ws.close(); return; }
           s.state = "connected"; s.offset = null;
+          for (const b of this.bstat.values()) b.last = null;  // a new connection starts every channel at seq 0
           this.setState(s.reconnects ? `connected (reconnected ${s.reconnects}×)` : "connected", "green");
           for (const [ch, hz] of this.subs) this.send({op: "sub", ch: [ch]}), hz != null && this.send({op: "rate", ch, hz});
         }
@@ -558,17 +713,51 @@ const Mon = {
     else {
       this.subs.delete(ch); this.send({op: "unsub", ch: [ch]});
       for (const k of [...this.points.keys()]) if (k === ch || k.startsWith(ch + "[")) this.points.delete(k);
+      this.bstat.delete(ch); this.values.delete(ch);
       this.dirty = true;
     }
   },
 
   renderChannels() {
     $("monNoChannels").hidden = this.channels.length > 0;
-    $("monChannels").tBodies[0].innerHTML = this.channels.map((c) => `<tr data-ch="${esc(c.name)}">
-      <td class="fw-medium">${esc(c.name)}</td><td class="text-secondary">${esc(c.unit || "")}</td>
+    $("monChannels").tBodies[0].innerHTML = this.channels.map((c) => {
+      const blk = c.type === "block";
+      return `<tr data-ch="${esc(c.name)}">
+      <td class="fw-medium">${esc(c.name)}${blk ? ` <span class="badge bg-azure-lt" title="binary blocks: ${esc(blockFields(c).join(", "))}">block</span>` : ""}</td>
+      <td class="text-secondary">${esc(c.unit || "")}</td>
       <td><input class="form-check-input m-0" type="checkbox" data-sub></td>
-      <td><input class="form-control form-control-sm" type="number" min="0" max="${c.max_hz || 1000}" value="${c.default_hz ?? 1}" title="0 = every value" data-hz></td>
-      <td class="val"></td></tr>`).join("");
+      <td><input class="form-control form-control-sm" type="number" min="${blk ? 1 : 0}" max="${c.max_hz || 1000}" value="${c.default_hz || (blk ? 1 : 0)}"
+        title="${blk ? "sample rate: the board runs at the highest rate any client asks for" : "0 = every value"}" data-hz></td>
+      <td class="val"></td></tr>`;
+    }).join("");
+  },
+
+  /** A block of a block channel: one point per sample and field, on the board's sample clock. */
+  block(buf) {
+    const b = decodeBlock(buf);
+    const c = b && this.blockById && this.blockById.get(b.id);
+    if (!c || !this.subs.has(c.name) || !b.values[0].length) return;
+    const s = this.sess;
+    let st = this.bstat.get(c.name);
+    if (!st) { st = {n: 0, rate: 0, lost: 0, last: null, since: performance.now()}; this.bstat.set(c.name, st); }
+    if (st.last !== null) { const miss = (b.seq - st.last - 1) >>> 0; if (miss < 0x80000000) st.lost += miss; }
+    st.last = b.seq;
+    const arrive = (performance.now() - this.t0) / 1000;
+    const t0 = b.t0_us / 1e6, dt = b.period_ns / 1e9, n = b.values[0].length;
+    if (s.offset === null || Math.abs(t0 + s.offset - arrive) > 5) s.offset = arrive - (t0 + (n - 1) * dt);
+    const names = blockFields(c);
+    b.values.forEach((col, f) => {
+      const k = `${c.name}[${names[f] || f}]`;
+      let p = this.points.get(k);
+      if (!p) { p = {t: [], v: []}; this.points.set(k, p); }
+      for (let i = 0; i < n; i++) { p.t.push(t0 + i * dt + s.offset); p.v.push(col[i]); }
+      if (p.t.length > MAX_BLOCK_POINTS + 5000) { p.t.splice(0, p.t.length - MAX_BLOCK_POINTS); p.v.splice(0, p.v.length - MAX_BLOCK_POINTS); }
+    });
+    st.n += n;
+    const now = performance.now();
+    if (now - st.since >= 1000) { st.rate = st.n * 1000 / (now - st.since); st.n = 0; st.since = now; }
+    this.values.set(c.name, `${Math.round(st.rate)} samples/s · lost ${st.lost} blocks`);
+    this.dirty = true;
   },
 
   frame(f) {
@@ -684,7 +873,7 @@ const Mon = {
     this.dirty = false;
     for (const [ch, v] of this.values) {
       const td = document.querySelector(`#monChannels tr[data-ch="${CSS.escape(ch)}"] td.val`);
-      if (td) td.textContent = typeof v === "number" ? (+v.toPrecision(5)).toString() : JSON.stringify(v);
+      if (td) td.textContent = typeof v === "number" ? (+v.toPrecision(5)).toString() : typeof v === "string" && this.bstat.has(ch) ? v : JSON.stringify(v);
     }
     const keys = [...this.points.keys()];
     if (keys.join("|") !== this.plotKeys || !this.plot) this.make(keys);
