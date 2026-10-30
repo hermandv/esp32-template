@@ -169,3 +169,30 @@ def test_wifi_failure_keeps_a_good_flash(monkeypatch):
     assert info["mac"] and info["wifi_error"] == "board: unable to connect" and "url" not in info
     monkeypatch.setattr(usbflash, "set_wifi", lambda *a: "http://10.0.0.5/")
     assert usbflash.program_and_join("COM9", None, print, ssid="10X")["url"] == "http://10.0.0.5/"
+
+
+def test_find_boards_label_is_not_the_hostname(monkeypatch):
+    names = iter(["esp-f25030", "bench 4"])
+
+    class Port:
+        def __init__(self, dev, vid):
+            self.device, self.vid, self.serial_number = dev, vid, "x"
+
+    class FakeImprov:
+        def __init__(self, port):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            pass
+
+        def info(self):
+            return ["devlink_app", "0.8.0", "ESP32-S3", next(names)]
+
+    monkeypatch.setattr(improv.list_ports, "comports",
+                        lambda: [Port("COM1", 0x303A), Port("COM2", 0x10C4), Port("COM3", 0x1234)])
+    monkeypatch.setattr(improv, "ImprovPort", FakeImprov)
+    b = improv.find_boards()
+    assert [(x.port, x.name, x.label) for x in b] == [("COM1", "esp-f25030", ""), ("COM2", "bench 4", "bench 4")]

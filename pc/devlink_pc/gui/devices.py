@@ -318,7 +318,7 @@ class DevicesTab(QWidget):
             if pick.exec() != QDialog.Accepted:
                 return
             b = boards[lst.currentRow()]
-            dlg = ConfigureDialog(self, f"Configure {b.port} via USB", self.s.bench_ssid, b.name)
+            dlg = ConfigureDialog(self, f"Configure {b.port} via USB", self.s.bench_ssid, b.label)
 
             def go():
                 self.s.bench_ssid = dlg.ssid.text()
