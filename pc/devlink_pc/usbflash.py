@@ -154,6 +154,14 @@ def scan_builds(root: str | Path) -> list[Build]:
     return sorted(builds, key=lambda b: (b.kind != "recovery", b.dir.name))
 
 
+def default_build_dir() -> str:
+    """The nearest build/ folder above the PC app that holds a recovery build, if there is one."""
+    for up in Path(__file__).resolve().parents:
+        if (up / "build").is_dir() and any(b.kind == "recovery" for b in scan_builds(up / "build")):
+            return str(up / "build")
+    return ""
+
+
 def make_firmware(recovery: Build, app: Build) -> Firmware:
     """Combine the two picked builds and check them; errors block programming, warnings are shown."""
     rec = recovery.flasher

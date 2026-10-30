@@ -7,21 +7,12 @@ writes, verifies, waits for the app and sets the label and Wi-Fi."""
 from __future__ import annotations
 
 import threading
-from pathlib import Path
 
 from PySide6.QtWidgets import (QComboBox, QDialog, QFileDialog, QFormLayout, QHBoxLayout, QLabel, QLineEdit,
                                QMessageBox, QPlainTextEdit, QPushButton, QVBoxLayout)
 
 from .. import usbflash
 from . import workers
-
-
-def default_build_dir() -> str:
-    """The nearest build/ folder above the PC app that holds a recovery build, if there is one."""
-    for up in Path(__file__).resolve().parents:
-        if any(b.kind == "recovery" for b in usbflash.scan_builds(up / "build")) if (up / "build").is_dir() else False:
-            return str(up / "build")
-    return ""
 
 
 def _html(errors: list[str], warnings: list[str]) -> str:
@@ -47,7 +38,7 @@ class ProgramDialog(QDialog):
         pr = QHBoxLayout()
         pr.addWidget(self.port, 1)
         pr.addWidget(btn_ports)
-        self.folder = QLineEdit(settings.usb_build_dir or default_build_dir())
+        self.folder = QLineEdit(settings.usb_build_dir or usbflash.default_build_dir())
         self.folder.editingFinished.connect(self.load_builds)
         btn_folder = QPushButton("Browse…")
         btn_folder.clicked.connect(self.browse)
