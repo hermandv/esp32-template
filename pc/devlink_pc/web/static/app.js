@@ -233,7 +233,7 @@ $("usbBtn").onclick = async () => {
     e.preventDefault();
     const b = boards[+a.dataset.i];
     modal("usbModal").hide();
-    openConfigure({mode: "usb", port: b.port, label: b.name});
+    openConfigure({mode: "usb", port: b.port, label: b.label});
   };
 };
 
