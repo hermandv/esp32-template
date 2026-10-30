@@ -170,21 +170,24 @@ static void wifi_t24_lan_change_wrong_password_reverts(void)
     now = S(103);
     bool reverted = false;
     bool reconnect_old = false;
-    while (now < S(140)) {
+    int retries = 0;
+    while (now < S(160)) {
         now += 500;
         a = dl_wifi_policy_tick(&p, now);
         if (a.reverted) {
             reverted = true;
             reconnect_old = a.connect && !a.use_pending;
-            UT_CHECK(now >= S(130) && now <= S(131));
+            UT_CHECK(now >= S(145) && now <= S(146));
             break;
         }
         if (a.connect) {
-            UT_CHECK(a.use_pending); /* retries before the deadline use the new settings */
+            UT_CHECK(a.use_pending); /* retries before the deadline use the new settings, every 3 s */
+            retries++;
             dl_wifi_policy_sta_down(&p, now);
         }
     }
     UT_CHECK(reverted && reconnect_old);
+    UT_CHECK(retries >= 12);
     a = dl_wifi_policy_sta_up(&p, now + 2000);
     UT_CHECK(!a.commit); /* old settings back, nothing to save */
     UT_CHECK(!a.ap_on);
@@ -198,8 +201,25 @@ static void wifi_lan_change_good_password_commits(void)
     dl_wifi_policy_set(&p, DL_WIFI_SRC_LAN, S(100));
     dl_wifi_actions_t a = dl_wifi_policy_sta_up(&p, S(104));
     UT_CHECK(a.commit);
-    a = dl_wifi_policy_tick(&p, S(140));
+    a = dl_wifi_policy_tick(&p, S(160));
     UT_CHECK(!a.reverted);
+}
+
+static void wifi_lan_change_survives_one_failed_attempt(void)
+{
+    /* One transient failure (missed beacon, 4-way timeout) right away, then a slow association + DHCP: the retry
+     * 3 s later still has most of the 45 s window, and the change commits. */
+    dl_wifi_policy_t p;
+    dl_wifi_policy_init(&p, DL_WIFI_MODE_APP, true, 0, 120, 0);
+    dl_wifi_policy_sta_up(&p, S(2));
+    dl_wifi_policy_set(&p, DL_WIFI_SRC_LAN, S(100));
+    dl_wifi_policy_sta_down(&p, S(108));
+    dl_wifi_actions_t a = dl_wifi_policy_tick(&p, S(111));
+    UT_CHECK(a.connect && a.use_pending);
+    a = dl_wifi_policy_tick(&p, S(140)); /* still associating / waiting for DHCP */
+    UT_CHECK(!a.reverted && !a.connect);
+    a = dl_wifi_policy_sta_up(&p, S(142));
+    UT_CHECK(a.commit);
 }
 
 static void wifi_t25_ap_change_saved_directly(void)
@@ -226,11 +246,12 @@ static void wifi_usb_set_without_creds(void)
     dl_wifi_policy_init(&p, DL_WIFI_MODE_APP, false, 20, 120, 0);
     dl_wifi_actions_t a = dl_wifi_policy_set(&p, DL_WIFI_SRC_USB, S(5));
     UT_CHECK(a.save_direct && a.connect);
-    /* LAN source while not connected behaves like a direct save too. */
+    /* The source is decided when the request arrives (dl_wifi_set): a LAN request stays pending even if the link
+     * dropped in the second before the policy sees it (I6). */
     dl_wifi_policy_init(&p, DL_WIFI_MODE_APP, true, 0, 120, 0);
     dl_wifi_policy_sta_down(&p, S(2));
     a = dl_wifi_policy_set(&p, DL_WIFI_SRC_LAN, S(5));
-    UT_CHECK(a.save_direct);
+    UT_CHECK(!a.save_direct && a.use_pending);
 }
 
 static void wifi_link_lost_reconnects_at_once(void)
@@ -266,6 +287,7 @@ int main(void)
     UT_RUN(wifi_recovery_ap_always_on);
     UT_RUN(wifi_t24_lan_change_wrong_password_reverts);
     UT_RUN(wifi_lan_change_good_password_commits);
+    UT_RUN(wifi_lan_change_survives_one_failed_attempt);
     UT_RUN(wifi_t25_ap_change_saved_directly);
     UT_RUN(wifi_usb_set_without_creds);
     UT_RUN(wifi_link_lost_reconnects_at_once);

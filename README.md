@@ -141,10 +141,17 @@ rolls back to the previous app. While the new app is being verified, the RTC wat
 |---|---|
 | New app broken (crash, hang, no API) | Nothing. The board rolls back by itself, and the PC app shows "rolled back". |
 | Valid app crash-loops | Nothing. After 5 crash loops the board boots recovery. |
-| App sleeps forever, turns Wi-Fi off or disables USB | Power-cycle the board 3 times quickly, or press reset 3 times. It boots recovery. |
+| App sleeps forever, turns Wi-Fi off or disables USB | Power-cycle the board 4 times quickly (each within 5 s of the last), or press reset 4 times. It boots recovery. (The first one only ends the running app; an app that dies by itself within 5 s needs 3.) |
 | App runs but you want recovery | Hold BOOT for 10 s, or use **Reboot to recovery** in the PC app. |
 | Wi-Fi settings lost or wrong | Hold BOOT for 3 s to open the config AP. The AP also opens by itself when the STA can't connect. |
 | In recovery | Upload a good app from the Firmware tab. Recovery's AP `ESP32S3-REC-<id>` is always on. |
+
+Two things that surprise people on the bench:
+
+- Five ordinary power cycles in a row, each less than 2 minutes after the previous boot (replugging while you wire a
+  board), also count as a crash loop: the board boots recovery with reason `crash_loop`. Nothing is wrong. Reboot to
+  the app from the PC app, or let recovery run 2 minutes and then power-cycle.
+- A power cycle leaves recovery only after recovery has run 2 minutes. Earlier, the board comes back to recovery.
 
 The last resort is a USB re-flash with `flash_all.py`.
 

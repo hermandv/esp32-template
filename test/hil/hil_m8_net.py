@@ -81,7 +81,7 @@ class Ws:
             for line in msg.splitlines():
                 if line.strip():
                     f = json.loads(line)
-                    if "op" in f and until_op:
+                    if ("op" in f or "channels" in f) and until_op:  # the list reply is the bare /channels object
                         return f
                     if "ch" in f:
                         self.frames.append(f)
@@ -350,8 +350,61 @@ def b_ota_pauses_blocks(c: Ctx) -> None:
     c.find()
 
 
+def b_ops_edge_cases(c: Ctx) -> None:
+    """Review fixes: list answers in full; "ch":[] unsubscribes nothing; a repeated sub keeps the rate."""
+    ws = Ws(c)
+    try:
+        r = ws.op({"op": "list"})
+        names = [x["name"] for x in r.get("channels", [])]
+        check(WAVE in names and "error" not in r, f"list answers with {len(names)} channels")
+        ws.op({"op": "sub", "ch": [WAVE, "sys.heap"]})
+        ws.op({"op": "rate", "ch": WAVE, "hz": 500})
+        r = ws.op({"op": "unsub", "ch": []})
+        check(r.get("ok") == [], f"unsub of an empty list ({r})")
+        r = ws.op({"op": "sub", "ch": [WAVE]})  # again: keeps 500 Hz
+        ws.pump(1.0)
+        ws.blocks.clear()
+        ws.pump(3)
+        periods = {b.period_ns for _, b in ws.blocks}
+        check(periods == {2_000_000}, f"still subscribed at 500 Hz after both ({sorted(periods)})")
+    finally:
+        ws.close()
+
+
+REC = ROOT / "build" / "recovery" / "devlink_recovery.bin"
+
+
+def b_recovery_cut_off(c: Ctx) -> None:
+    """Review fix: a recovery upload cut off after writing started is recorded as a failed self-test; a good
+    recovery update afterwards passes its self-test."""
+    data = REC.read_bytes()
+    want = image.parse_file(REC).version
+    s = socket.create_connection((c.ip, 80), timeout=30)
+    s.sendall((f"POST /api/v1/ota?target=recovery HTTP/1.1\r\nHost: {c.ip}\r\nX-Api-Key: {DEFAULT_KEY}\r\n"
+               f"X-Device-Id: {c.mac}\r\nContent-Length: {len(data)}\r\n\r\n").encode() + data[:300_000])
+    time.sleep(3)
+    s.close()  # connection lost after about 300 KB of factory were written
+    end = time.time() + 30
+    st = {}
+    while time.time() < end:
+        try:
+            st = c.api().info().get("recovery_selftest", {})
+            if st.get("state") == "failed":
+                break
+        except Exception:  # noqa: BLE001
+            pass
+        time.sleep(1)
+    check(st.get("state") == "failed" and "incomplete" in st.get("version", ""), f"recorded: {st}")
+    r = ota.update_recovery(c.mac, data, DEFAULT_KEY, hint_ip=c.ip)
+    check(r.state == "updated", f"good recovery update: {r.state} {r.message}")
+    c.find()
+    info = c.api().info()
+    check(info["recovery_selftest"]["state"] == "ok" and info["recovery"]["version"] == want,
+          f"recovery {info['recovery']['version']}, self-test {info['recovery_selftest']}")
+
+
 TESTS = [b_setup, b_channels, b_rates, b_long_1khz, b_two_clients, b_json_only_client, b_slow_client,
-         b_ota_pauses_blocks]
+         b_ops_edge_cases, b_recovery_cut_off, b_ota_pauses_blocks]
 
 
 def main() -> int:

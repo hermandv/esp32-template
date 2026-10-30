@@ -108,7 +108,7 @@ class ImprovPort:
         res = [d for t, d in self.rpc(CMD_INFO, timeout=2.0) if t == RPC_RESULT]
         return strings(res[0]) if res else None
 
-    def provision(self, ssid: str, password: str, timeout: float = 30.0) -> str:
+    def provision(self, ssid: str, password: str, timeout: float = 50.0) -> str:
         """Send Wi-Fi settings; returns the board's URL once connected, raises RuntimeError otherwise."""
         s, p = ssid.encode(), password.encode()
         if not 0 < len(s) <= 32 or len(p) > 64:

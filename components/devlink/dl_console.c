@@ -17,7 +17,7 @@
 
 static const char *TAG = "dl_console";
 
-#define IMPROV_CONNECT_TIMEOUT_MS 20000u
+#define IMPROV_CONNECT_TIMEOUT_MS 40000u /* scan + slow (WPA3, weak) association + DHCP, with a retry */
 
 static devlink_console_extra_fn s_extra;
 static SemaphoreHandle_t s_out_lock;

@@ -106,37 +106,43 @@ static const esp_partition_t *slot(int i)
                                     NULL);
 }
 
-/* A slot is usable if it holds an app image and is not marked invalid/aborted. */
-static bool slot_usable(int i, esp_app_desc_t *desc)
+/* How good a slot is as "the app to keep" (SPEC §6.5): 2 = proven (valid, or undefined as after a first flash),
+ * 1 = not verified yet (new / pending verify: may still roll back), 0 = no image, invalid or aborted. */
+static int slot_rank(int i, esp_app_desc_t *desc)
 {
     const esp_partition_t *p = slot(i);
     esp_ota_img_states_t st = ESP_OTA_IMG_UNDEFINED;
     if ((p == NULL) || (esp_ota_get_partition_description(p, desc) != ESP_OK)) {
-        return false;
+        return 0;
     }
     if (esp_ota_get_state_partition(p, &st) != ESP_OK) {
         st = ESP_OTA_IMG_UNDEFINED;
     }
-    return (st != ESP_OTA_IMG_INVALID) && (st != ESP_OTA_IMG_ABORTED);
+    if ((st == ESP_OTA_IMG_INVALID) || (st == ESP_OTA_IMG_ABORTED)) {
+        return 0;
+    }
+    return ((st == ESP_OTA_IMG_NEW) || (st == ESP_OTA_IMG_PENDING_VERIFY)) ? 1 : 2;
 }
 
 bool dl_valid_app_slot(int *out)
 {
     esp_app_desc_t d;
     const esp_partition_t *boot = esp_ota_get_boot_partition();
+    int best = -1;
+    int best_rank = 0;
     for (int i = 0; i < 2; i++) {
-        if ((boot != NULL) && (slot(i) == boot) && slot_usable(i, &d)) {
-            *out = i; /* prefer the one otadata selects */
-            return true;
+        int r = slot_rank(i, &d);
+        /* the better rank wins; on a tie the one otadata selects */
+        if ((r > best_rank) || ((r == best_rank) && (r > 0) && (boot != NULL) && (slot(i) == boot))) {
+            best = i;
+            best_rank = r;
         }
     }
-    for (int i = 0; i < 2; i++) {
-        if (slot_usable(i, &d)) {
-            *out = i;
-            return true;
-        }
+    if (best < 0) {
+        return false;
     }
-    return false;
+    *out = best;
+    return true;
 }
 
 /* ---- JSON ---- */

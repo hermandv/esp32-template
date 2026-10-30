@@ -26,6 +26,7 @@
 #define WS_RX_MAX  512u
 #define LOCK_WAIT  pdMS_TO_TICKS(20)
 #define STALL_US   10000000LL /* a client that cannot take data for 10 s is closed */
+#define LIST_MAX   4096u      /* {"op":"list"} reply: the channel list (32 channels with block metadata fit) */
 
 struct devlink_channel {
     char name[32];
@@ -38,6 +39,7 @@ struct devlink_channel {
     const char *fields;                    /* the module's string: names, comma-separated */
     uint8_t n_fields;
     uint8_t sample;
+    volatile uint32_t lost;                /* blocks lost because the lock was busy (producer task only) */
 };
 
 typedef struct {
@@ -51,6 +53,7 @@ typedef struct {
     dl_bring_t bring;                      /* binary blocks; mem NULL until the first block subscription */
     uint32_t bseq[DEVLINK_MAX_CHANNELS];   /* next block sequence number per channel (counts dropped blocks) */
     uint32_t bgap;                         /* bit per channel: a block was dropped since the last one queued */
+    bool last_bin;                         /* the last send was a block: send text next (alternate) */
 } client_t;
 
 static devlink_channel_t s_ch[DEVLINK_MAX_CHANNELS];
@@ -238,10 +241,19 @@ void devlink_publish_json(devlink_channel_t *ch, const char *json)
 void devlink_publish_block(devlink_channel_t *ch, int64_t t0_us, uint32_t period_ns, const float *scale,
                            const void *samples, uint16_t n_samples, uint8_t flags)
 {
-    if ((ch == NULL) || (ch->type != DL_BLOCK) || (n_samples == 0u) || (samples == NULL) || !listening(ch) ||
-        (xSemaphoreTake(s_lock, LOCK_WAIT) != pdTRUE)) {
+    if ((ch == NULL) || (ch->type != DL_BLOCK) || (n_samples == 0u) || (samples == NULL) || !listening(ch)) {
+        if ((ch != NULL) && (s_lock != NULL) && dl_ota_busy() && (devlink_channel_wanted_hz(ch) > 0u)) {
+            ch->lost++; /* paused for an OTA: the clients see the gap afterwards */
+        }
         return;
     }
+    if (xSemaphoreTake(s_lock, LOCK_WAIT) != pdTRUE) {
+        ch->lost++; /* the next block carries the gap (sequence numbers and GAP flag) */
+        s_busy_drops++;
+        return;
+    }
+    uint32_t lost = ch->lost;
+    ch->lost = 0;
     size_t dlen = (size_t)n_samples * ch->n_fields * dl_sample_size(ch->sample);
     uint32_t bit = 1u << ch->index;
     bool any = false;
@@ -249,6 +261,10 @@ void devlink_publish_block(devlink_channel_t *ch, int64_t t0_us, uint32_t period
         client_t *cl = &s_cl[c];
         if (!cl->used || ((cl->sub & bit) == 0u)) {
             continue;
+        }
+        if (lost > 0u) {
+            cl->bseq[ch->index] += lost;
+            cl->bgap |= bit;
         }
         dl_block_hdr_t h = {.sample = ch->sample, .ch_id = ch->index, .n_fields = ch->n_fields,
                             .flags = (uint8_t)((flags & DL_BLOCK_FLAG_SRC_GAP) |
@@ -385,21 +401,31 @@ static void sender_task(void *arg)
                     break;
                 }
                 s_cl[c].stalled_since = 0;
-                size_t n = dl_ring_pop_batch(&s_cl[c].ring, s_msg, sizeof(s_msg));
-                size_t nb = dl_bring_pop(&s_cl[c].bring, s_bmsg, sizeof(s_bmsg));
+                /* One message per round, text and blocks taking turns: neither kind starves the other, and a round
+                 * never sends more than writable() promised (about 2.8 KB of send buffer free). */
+                size_t n = 0;
+                size_t nb = 0;
+                if (s_cl[c].last_bin || (s_cl[c].bring.count == 0u)) {
+                    n = dl_ring_pop_batch(&s_cl[c].ring, s_msg, sizeof(s_msg));
+                }
+                if (n == 0u) {
+                    nb = dl_bring_pop(&s_cl[c].bring, s_bmsg, sizeof(s_bmsg));
+                }
+                s_cl[c].last_bin = (nb > 0u);
                 /* s_msg and s_bmsg are only used by this task: they can be sent after unlocking */
                 xSemaphoreGive(s_lock);
                 if ((n == 0u) && (nb == 0u)) {
                     break;
                 }
-                /* one text batch and one block per round, so neither kind starves the other */
-                httpd_ws_frame_t f = {.type = HTTPD_WS_TYPE_TEXT, .payload = (uint8_t *)s_msg, .len = n};
-                httpd_ws_frame_t fb = {.type = HTTPD_WS_TYPE_BINARY, .payload = s_bmsg, .len = nb};
-                if (((n > 0u) && (httpd_ws_send_data(s_server, fd, &f) != ESP_OK)) ||
-                    ((nb > 0u) && (httpd_ws_send_data(s_server, fd, &fb) != ESP_OK))) {
+                httpd_ws_frame_t f = (n > 0u) ? (httpd_ws_frame_t){.type = HTTPD_WS_TYPE_TEXT, .payload = (uint8_t *)s_msg, .len = n}
+                                              : (httpd_ws_frame_t){.type = HTTPD_WS_TYPE_BINARY, .payload = s_bmsg, .len = nb};
+                if (httpd_ws_send_data(s_server, fd, &f) != ESP_OK) {
+                    /* Failed (timeout, no memory): the frame stream may be cut mid-frame, so the session is closed
+                     * too; otherwise the PC would keep a silent, open socket. */
                     xSemaphoreTake(s_lock, portMAX_DELAY);
                     remove_client_locked(fd);
                     xSemaphoreGive(s_lock);
+                    (void)httpd_sess_trigger_close(s_server, fd);
                     break;
                 }
             }
@@ -444,7 +470,7 @@ void dl_stream_channels_json(dl_jw_t *w)
             dl_jw_key(w, "fields");
             dl_jw_raw(w, "[");
             char name[DEVLINK_BLOCK_FIELDS_MAX + 1u];
-            const char *p = s_ch[i].fields;
+            const char *p = (s_ch[i].fields != NULL) ? s_ch[i].fields : "";
             for (size_t f = 0; *p != '\0'; f++) {
                 size_t k = strcspn(p, ",");
                 memcpy(name, p, k);
@@ -468,10 +494,29 @@ static void handle_op(httpd_req_t *req, client_t *cl, const char *j, size_t len)
     char op[8] = "";
     char name[32];
     dl_jw_t w;
-    dl_jw_init(&w, reply, sizeof(reply));
     (void)dl_json_get_str(j, len, "op", op, sizeof(op));
+    if (strcmp(op, "list") == 0) {
+        /* the channel list is larger than the other replies (up to 32 channels): its own buffer, as /channels */
+        char *big = malloc(LIST_MAX);
+        if (big == NULL) {
+            ws_reply(req, "{\"op\":\"error\",\"error\":\"no_memory\"}");
+            return;
+        }
+        dl_jw_init(&w, big, LIST_MAX);
+        xSemaphoreTake(s_lock, portMAX_DELAY);
+        dl_stream_channels_json(&w);
+        xSemaphoreGive(s_lock);
+        ws_reply(req, w.overflow ? "{\"op\":\"error\",\"error\":\"reply_too_long\"}" : big);
+        free(big);
+        return;
+    }
+    dl_jw_init(&w, reply, sizeof(reply));
 
     xSemaphoreTake(s_lock, portMAX_DELAY);
+    if (!cl->used || (cl->fd != httpd_req_to_sockfd(req))) {
+        xSemaphoreGive(s_lock); /* removed (stalled or failed send) since the handler looked it up */
+        return;
+    }
     if ((strcmp(op, "sub") == 0) || (strcmp(op, "unsub") == 0)) {
         bool sub = (op[0] == 's');
         dl_jw_raw(&w, "{");
@@ -481,8 +526,8 @@ static void handle_op(httpd_req_t *req, client_t *cl, const char *j, size_t len)
         size_t ok = 0;
         size_t i = 0;
         char nomem[32] = ""; /* a block channel whose ring could not be allocated */
-        if (!sub && (dl_json_get_str_at(j, len, "ch", 0, name, sizeof(name)) == DL_JSON_MISSING)) {
-            cl->sub = 0; /* unsub without "ch": everything */
+        if (!sub && (dl_json_get_str(j, len, "ch", name, sizeof(name)) == DL_JSON_MISSING)) {
+            cl->sub = 0; /* unsub without a "ch" key: everything ("ch":[] is nothing) */
         }
         for (; dl_json_get_str_at(j, len, "ch", i, name, sizeof(name)) == DL_JSON_OK; i++) {
             devlink_channel_t *ch = devlink_channel_find(name);
@@ -497,12 +542,12 @@ static void handle_op(httpd_req_t *req, client_t *cl, const char *j, size_t len)
                 }
                 dl_bring_init(&cl->bring, mem, CONFIG_DEVLINK_BLOCK_SLOTS);
             }
-            if (sub) {
+            if (sub && ((cl->sub & (1u << ch->index)) == 0u)) { /* a repeated sub keeps the client's rate */
                 cl->sub |= 1u << ch->index;
                 uint16_t hz = ch->default_hz;
                 cl->hz[ch->index] = ((ch->max_hz > 0u) && (hz > ch->max_hz)) ? ch->max_hz : hz;
                 cl->next[ch->index] = 0;
-            } else {
+            } else if (!sub) {
                 cl->sub &= ~(1u << ch->index);
             }
             dl_jw_raw(&w, (ok++ > 0u) ? "," : "");
@@ -544,8 +589,6 @@ static void handle_op(httpd_req_t *req, client_t *cl, const char *j, size_t len)
             dl_jw_kv_uint(&w, "hz", v);
             dl_jw_raw(&w, "}");
         }
-    } else if (strcmp(op, "list") == 0) {
-        dl_stream_channels_json(&w);
     } else {
         dl_jw_raw(&w, "{\"op\":\"error\",\"error\":\"unknown_op\"}");
     }
@@ -568,9 +611,11 @@ esp_err_t dl_stream_ws_post_handshake(httpd_req_t *req)
             memset(free_cl->hz, 0, sizeof(free_cl->hz));
             memset(free_cl->next, 0, sizeof(free_cl->next));
             dl_ring_init(&free_cl->ring);
+            free(free_cl->bring.mem); /* normally NULL already (freed when the client was removed) */
             dl_bring_init(&free_cl->bring, NULL, 0);
             memset(free_cl->bseq, 0, sizeof(free_cl->bseq));
             free_cl->bgap = 0;
+            free_cl->last_bin = false;
             free_cl->stalled_since = 0;
             free_cl->sub = 0;
             free_cl->fd = fd;

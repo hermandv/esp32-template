@@ -34,9 +34,13 @@ def current() -> WifiState:
 
 
 def ipv4() -> str:
+    # The Wi-Fi adapter by its media type, not by its name ("Wi-Fi", "WLAN", "Wi-Fi 2" ... depending on the PC).
     r = subprocess.run(["powershell", "-NoProfile", "-Command",
-                        "(Get-NetIPAddress -InterfaceAlias Wi-Fi -AddressFamily IPv4 -ErrorAction SilentlyContinue)"
-                        ".IPAddress"], capture_output=True, text=True, creationflags=_NO_WINDOW)
+                        "Get-NetAdapter -Physical -ErrorAction SilentlyContinue | "
+                        "Where-Object { $_.NdisPhysicalMedium -eq 9 -and $_.Status -eq 'Up' } | "
+                        "Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue | "
+                        "Select-Object -ExpandProperty IPAddress"],
+                       capture_output=True, text=True, creationflags=_NO_WINDOW)
     return r.stdout.strip().splitlines()[0] if r.stdout.strip() else ""
 
 

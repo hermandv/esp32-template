@@ -117,6 +117,21 @@ static esp_err_t fail(httpd_req_t *req, const char *status, const char *error, e
     return ESP_FAIL;
 }
 
+/* A recovery upload failed after `factory` was (partly) written: the old recovery is gone. Record it as a failed
+ * self-test so /info and the PC app show it (I5: the app stays valid; upload a good recovery again). */
+static esp_err_t rec_fail(httpd_req_t *req, bool begun, const char *status, const char *error, size_t left)
+{
+    if (begun) {
+        dlcfg_t cfg;
+        (void)dlcfg_load(&cfg);
+        cfg.rec_selftest = DLCFG_SELFTEST_FAILED;
+        snprintf(cfg.rec_selftest_version, sizeof(cfg.rec_selftest_version), "%.18s (incomplete)", s_chk.version);
+        (void)dlcfg_save(&cfg);
+        ESP_LOGE(TAG, "recovery update failed after writing started (%s): factory holds no valid recovery", error);
+    }
+    return fail(req, status, error, NULL, left);
+}
+
 /* Recovery update (SPEC §7.3, I5): only from a valid app that was not just rolled back. Written straight into
  * `factory` (no A/B), verified, then the self-test boot: the app marks the self-test pending in dlcfg and reboots into
  * recovery; recovery records the result and restarts into the app. */
@@ -163,10 +178,10 @@ static esp_err_t run_recovery_upload(httpd_req_t *req, bool force)
     while (left > 0u) {
         int n = httpd_req_recv(req, (char *)s_buf, (left < CHUNK) ? left : CHUNK);
         if (n == HTTPD_SOCK_ERR_TIMEOUT) {
-            return fail(req, "408 Request Timeout", "idle_timeout", NULL, 0);
+            return rec_fail(req, begun, "408 Request Timeout", "idle_timeout", 0);
         }
         if (n <= 0) {
-            return fail(req, "400 Bad Request", "connection_lost", NULL, 0);
+            return rec_fail(req, begun, "400 Bad Request", "connection_lost", 0);
         }
         left -= (size_t)n;
         bool flush;
@@ -176,10 +191,10 @@ static esp_err_t run_recovery_upload(httpd_req_t *req, bool force)
             continue;
         }
         if (r != DL_OTA_OK) {
-            return fail(req, "400 Bad Request", dl_ota_result_name(r), NULL, left);
+            return rec_fail(req, begun, "400 Bad Request", dl_ota_result_name(r), left);
         }
         if (flush && !force && (strstr(s_chk.project, "recovery") == NULL)) {
-            return fail(req, "400 Bad Request", "not_a_recovery_image", NULL, left); /* nothing written yet */
+            return rec_fail(req, begun, "400 Bad Request", "not_a_recovery_image", left); /* nothing written yet */
         }
         /* Header accepted: write the buffered head, then this chunk's remainder. */
         const uint8_t *pieces[2] = {flush ? s_chk.head : NULL, s_buf + data_off};
@@ -194,12 +209,12 @@ static esp_err_t run_recovery_upload(httpd_req_t *req, bool force)
             }
             while (erased < off + lens[i]) {
                 if (esp_partition_erase_range(part, erased, 4096) != ESP_OK) {
-                    return fail(req, "500 Internal Server Error", "factory_erase_failed", NULL, left);
+                    return rec_fail(req, begun, "500 Internal Server Error", "factory_erase_failed", left);
                 }
                 erased += 4096u;
             }
             if (esp_partition_write(part, off, pieces[i], lens[i]) != ESP_OK) {
-                return fail(req, "500 Internal Server Error", "factory_write_failed", NULL, left);
+                return rec_fail(req, begun, "500 Internal Server Error", "factory_write_failed", left);
             }
             off += lens[i];
         }
@@ -207,14 +222,14 @@ static esp_err_t run_recovery_upload(httpd_req_t *req, bool force)
     }
     r = dl_ota_check_finish(&s_chk);
     if (r != DL_OTA_OK) {
-        return fail(req, "400 Bad Request", dl_ota_result_name(r), NULL, 0);
+        return rec_fail(req, begun, "400 Bad Request", dl_ota_result_name(r), 0);
     }
     s_prog.state = "verifying";
     esp_image_metadata_t meta;
     esp_partition_pos_t pos = {.offset = part->address, .size = part->size};
     if (esp_image_verify(ESP_IMAGE_VERIFY, &pos, &meta) != ESP_OK) {
         /* factory now holds a broken image; the app stays valid (I5), the PC app offers the previous recovery */
-        return fail(req, "400 Bad Request", "recovery_image_corrupt", NULL, 0);
+        return rec_fail(req, begun, "400 Bad Request", "recovery_image_corrupt", 0);
     }
 
     dlcfg_t cfg;
@@ -357,7 +372,13 @@ typedef struct {
 } job_t;
 
 static QueueHandle_t s_jobs;    /* uploads, one at a time (lock held) */
-static QueueHandle_t s_rejects; /* concurrent uploads to drain and answer with 409 */
+static QueueHandle_t s_rejects; /* refused uploads to drain and answer (409 in progress, 401, wrong device, ...) */
+
+typedef struct {
+    httpd_req_t *req;
+    const char *status; /* string literals */
+    const char *error;
+} reject_t;
 
 static void ota_worker(void *arg)
 {
@@ -376,11 +397,11 @@ static void reject_worker(void *arg)
     (void)arg;
     static uint8_t buf[1024];
     for (;;) {
-        httpd_req_t *req;
-        if (xQueueReceive(s_rejects, &req, portMAX_DELAY) == pdTRUE) {
-            drain(req, req->content_len, buf, sizeof(buf));
-            (void)reply_error(req, "409 Conflict", "ota_in_progress");
-            (void)httpd_req_async_handler_complete(req);
+        reject_t r;
+        if (xQueueReceive(s_rejects, &r, portMAX_DELAY) == pdTRUE) {
+            drain(r.req, r.req->content_len, buf, sizeof(buf));
+            (void)reply_error(r.req, r.status, r.error);
+            (void)httpd_req_async_handler_complete(r.req);
         }
     }
 }
@@ -391,29 +412,35 @@ static bool start_workers(void)
         return true;
     }
     s_jobs = xQueueCreate(1, sizeof(job_t));
-    s_rejects = xQueueCreate(2, sizeof(httpd_req_t *));
+    s_rejects = xQueueCreate(2, sizeof(reject_t));
     return (s_jobs != NULL) && (s_rejects != NULL) &&
            (xTaskCreate(ota_worker, "dl_ota", 6144, NULL, 5, NULL) == pdPASS) &&
            (xTaskCreate(reject_worker, "dl_ota_rej", 3072, NULL, 4, NULL) == pdPASS);
 }
 
+esp_err_t dl_ota_reject(httpd_req_t *req, const char *status, const char *error)
+{
+    reject_t r = {.status = status, .error = error};
+    /* Drained in the reject task: discarding a multi-MB body in the HTTP server task would stall the whole API (and
+     * in recovery the health check) for as long as the client keeps sending. */
+    if (!start_workers() || (httpd_req_async_handler_begin(req, &r.req) != ESP_OK)) {
+        (void)reply_error(req, status, error);
+        return ESP_FAIL;
+    }
+    if (xQueueSend(s_rejects, &r, 0) != pdTRUE) { /* reject task busy: answer without draining */
+        (void)reply_error(r.req, status, error);
+        (void)httpd_req_async_handler_complete(r.req);
+    }
+    return ESP_OK;
+}
+
 esp_err_t dl_ota_handle(httpd_req_t *req, bool to_recovery, bool force)
 {
-    httpd_req_t *copy = NULL;
-
     if (!start_workers()) {
         return reply_error(req, "500 Internal Server Error", "no_memory");
     }
     if (!lock()) {
-        if (httpd_req_async_handler_begin(req, &copy) != ESP_OK) {
-            (void)reply_error(req, "409 Conflict", "ota_in_progress");
-            return ESP_FAIL;
-        }
-        if (xQueueSend(s_rejects, &copy, 0) != pdTRUE) { /* reject task busy: answer without draining */
-            (void)reply_error(copy, "409 Conflict", "ota_in_progress");
-            (void)httpd_req_async_handler_complete(copy);
-        }
-        return ESP_OK;
+        return dl_ota_reject(req, "409 Conflict", "ota_in_progress");
     }
     job_t j = {.to_recovery = to_recovery, .force = force};
     if (httpd_req_async_handler_begin(req, &j.req) != ESP_OK) {

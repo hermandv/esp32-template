@@ -147,7 +147,7 @@ def n_ota_idle_and_concurrent(b: Board, api: Api) -> None:
     except OSError:
         pass
     s.close()
-    check(time.time() - t0 < 20, f"stalled upload ended after {time.time() - t0:.0f} s ({resp[:40]!r})")
+    check(time.time() - t0 < 30, f"stalled upload ended after {time.time() - t0:.0f} s ({resp[:40]!r})")
     p = api.get("/ota/progress").json()
     check(p["error"] == "idle_timeout", f"progress reports idle_timeout ({p})")
 

@@ -101,8 +101,13 @@ size_t dlcfg_build(const dlcfg_t *cfg, uint32_t seq, uint8_t *buf, size_t buflen
     return dlcfg_record_size();
 }
 
-void dlcfg_push_reset_reason(dlcfg_t *cfg, uint32_t reason)
+bool dlcfg_push_reset_reason(dlcfg_t *cfg, uint32_t reason)
 {
+    uint32_t newest = cfg->reset_ring[(cfg->reset_ring_pos + DLCFG_RESET_RING - 1u) % DLCFG_RESET_RING];
+    if (newest == reason) {
+        return false;
+    }
     cfg->reset_ring[cfg->reset_ring_pos % DLCFG_RESET_RING] = reason;
     cfg->reset_ring_pos = (uint8_t)((cfg->reset_ring_pos + 1u) % DLCFG_RESET_RING);
+    return true;
 }

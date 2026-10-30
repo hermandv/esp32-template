@@ -63,7 +63,9 @@ def configure_via_ap(ap_ssid: str, ssid: str, password: str, label: str = "", ke
         wifi_win.remove_temp(ap_ssid)
         if before.profile:
             say(f"back to {before.profile}")
-            wifi_win.connect(before.profile)
+            if not wifi_win.connect(before.profile):
+                say(f"this PC is not back on {before.profile} yet: the board may be on the LAN already, but this PC "
+                    "cannot see it until its own Wi-Fi reconnects")
 
     say("waiting for the board on the LAN")
     # mDNS may still hold the board's old address, so a sighting alone proves nothing: wait for a status that says

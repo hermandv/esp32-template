@@ -14,7 +14,7 @@ from . import image as img
 from .api import ApiError, DeviceApi
 from .discovery import MdnsBrowser, find_by_mac, norm_mac
 
-REAPPEAR_S = 120   # SPEC §7.2
+REAPPEAR_S = 180   # SPEC §7.2: a hang (90 s RTC WDT) + rollback + a slow Wi-Fi join
 VALID_S = 75       # the new app's self-test (60 s) + margin
 
 
@@ -73,15 +73,26 @@ def update_device(mac: str, data: bytes, key: str, force: bool = False, hint_ip:
         return res
 
     say(mac, "uploading", 0, len(data))
+    sent = [0]
+
+    def progress(done: int, total: int) -> None:
+        sent[0] = done
+        say(mac, "uploading", done, total)
+
     try:
-        r = api.ota(data, force=force or bool(info.warnings), progress=lambda d, t: say(mac, "uploading", d, t))
+        r = api.ota(data, force=force or bool(info.warnings), progress=progress)
+        res.slot = r.get("slot", "")
     except ApiError as e:
         res.state, res.message = "rejected", f"board refused the image: {e.error}"
         return res
     except requests.RequestException as e:
-        res.state, res.message = "failed", f"upload: {e}"
-        return res
-    res.slot = r.get("slot", "")
+        if sent[0] < len(data):
+            res.state, res.message = "failed", f"upload: {e}"
+            return res
+        # The whole image went out but the reply was lost (the board restarts 0.5 s after replying; a weak link
+        # can drop the last packets): judge by what the board runs afterwards.
+        say(mac, "reply lost, checking the board", 0, 0)
+        res.slot = "ota_1" if old_slot == "ota_0" else "ota_0"
 
     # The board restarts; wait for the same MAC (its IP may change) and check what runs.
     say(mac, "restarting", 0, 0)
@@ -117,7 +128,7 @@ def update_device(mac: str, data: bytes, key: str, force: bool = False, hint_ip:
             say(mac, f"in recovery ({reason})", 0, 0)
         time.sleep(2)
     res.state = "timeout"
-    res.message = ("board did not come back within 120 s" if last is None else
+    res.message = (f"board did not come back within {reappear_s:.0f} s" if last is None else
                    f"no verified result: running {last['running']} {last['fw']['version']}, reason {last['boot']['reason']}")
     return res
 

@@ -252,7 +252,7 @@ def t_torn_records(b: Board) -> None:
 def only_ota0(b: Board) -> None:
     """Known slot state for the slot tests: the app in ota_0, ota_1 empty, otadata selecting ota_0 (as after
     flash_all.py; earlier OTA tests may have left the app in ota_1)."""
-    time.sleep(6)
+    time.sleep(8)  # past ALIVE_5S (5 s, counted from the boot, not from the banner)
     with tempfile.TemporaryDirectory() as tmp:
         od = Path(tmp) / "otadata.bin"
         od.write_bytes(dl.otadata_image(0))
@@ -268,7 +268,7 @@ def t_slot_corrupt(b: Board) -> None:
     """Test 18: one corrupted byte in the active slot -> the loader falls back (here: to recovery)."""
     b.ensure_app_normal()
     only_ota0(b)
-    time.sleep(6)  # ALIVE_5S, so the boot interrupted by esptool is not a quick one
+    time.sleep(8)  # ALIVE_5S, so the boot interrupted by esptool is not a quick one
     with tempfile.TemporaryDirectory() as tmp:
         sec = Path(tmp) / "sector.bin"
         b.esptool("read-flash", hex(OTA0 + 0x1000), "0x1000", str(sec), reset=False)
@@ -280,7 +280,7 @@ def t_slot_corrupt(b: Board) -> None:
     check(info["image"] == "recovery", "corrupted ota_0 -> recovery runs")
     check(info["reason"] == "no_valid_app", "reason no_valid_app (loader fallback detected)")
     check(info["start"] == hex(OTA0) and info["running"] == hex(FACTORY), "bootloader chose ota_0, factory runs")
-    time.sleep(6)
+    time.sleep(8)  # past ALIVE_5S (5 s, counted from the boot, not from the banner)
     b.write(OTA0, BUILD / "bootlab" / "bootlab.bin")
     info = b.wait_boot()
     check(info["image"] == "bootlab" and info["reason"] == "normal", "restored ota_0 boots normally")
@@ -290,7 +290,7 @@ def t_slot_corrupt(b: Board) -> None:
 def t_slots_erased(b: Board) -> None:
     """Test 17: both app slots erased -> recovery; an app written back boots."""
     b.ensure_app_normal()
-    time.sleep(6)
+    time.sleep(8)  # past ALIVE_5S (5 s, counted from the boot, not from the banner)
     b.esptool("erase-region", hex(OTA0), hex(SLOT_SIZE), reset=False)
     b.esptool("erase-region", hex(OTA1), hex(SLOT_SIZE))
     info = b.wait_boot()
@@ -306,7 +306,7 @@ def t_recovery_crashes(b: Board) -> None:
     if not crash_bin.exists():
         raise Fail(f"build the crash recovery first: {crash_bin}")
     b.ensure_app_normal()
-    time.sleep(6)
+    time.sleep(8)  # past ALIVE_5S (5 s, counted from the boot, not from the banner)
     b.write(FACTORY, crash_bin)
     b.wait_boot()
     b.checkpoint()
@@ -331,7 +331,7 @@ def t_recovery_crashes(b: Board) -> None:
         check(info is not None and info["image"] == "bootlab", "valid app runs instead of the crashing recovery")
         check(info["reason"] == "recovery_loop", "reason recovery_loop")
     finally:
-        time.sleep(6)
+        time.sleep(8)  # past ALIVE_5S (5 s, counted from the boot, not from the banner)
         b.write(FACTORY, good_bin)
         b.wait_boot()
         b.checkpoint()
@@ -371,7 +371,7 @@ def m_quick_power_cycles(b: Board) -> None:
     check(info.get("image") == "recovery" and info.get("reason") == "quick_reset", "recovery, reason quick_reset")
     check(info["rtc"] == "1", "valid RTC hand-over after a power-on reset")
     # The app would sleep again 1 s after boot: clear its NVS (mode) from here, then back to a normal app.
-    time.sleep(6)
+    time.sleep(8)  # past ALIVE_5S (5 s, counted from the boot, not from the banner)
     b.esptool("erase-region", "0x9000", "0x6000")
     info = b.wait_boot()
     check(info["image"] == "bootlab", "app back after clearing its NVS")
@@ -383,7 +383,7 @@ def m_power_cycle_in_recovery(b: Board) -> None:
     b.ensure_app_normal()
     info = b.reboot_with("recovery")
     check(info["image"] == "recovery", "in recovery (requested)")
-    time.sleep(6)
+    time.sleep(8)  # past ALIVE_5S (5 s, counted from the boot, not from the banner)
     operator("Unplug the USB cable, wait 2 s, plug it back in (once).")
     info = b.wait_replug(timeout=300)
     check(info["image"] == "bootlab" and info["reason"] == "normal", "power cycle in recovery -> app")

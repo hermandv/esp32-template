@@ -19,6 +19,7 @@ from ..settings import Settings, data_dir
 from . import workers
 from .usbprogram import ProgramDialog
 
+LAN_STALE_S = 60  # a LAN row not seen for this long no longer counts as on the LAN
 HIGHLIGHT = {"rollback", "crash_loop", "quick_reset", "recovery_loop", "no_valid_app"}
 COLUMNS = ["MAC", "ID", "Label", "IP", "Hostname", "Mode", "Boot reason", "App", "Recovery", "RSSI", "Last seen"]
 
@@ -45,7 +46,9 @@ class Row:
 
     @property
     def on_lan(self) -> bool:
-        return bool(self.ip) and self.mode != "needs-config"
+        """Seen on the LAN recently. A board that went back to its config AP (factory reset, Wi-Fi lost) then shows
+        up as needs-config again instead of being hidden behind its old LAN row."""
+        return bool(self.ip) and self.mode != "needs-config" and (time.time() - self.last_seen < LAN_STALE_S)
 
 
 def discover_all(s: Settings, mdns: discovery.MdnsBrowser | None) -> list[tuple[discovery.Seen, dict | None]]:

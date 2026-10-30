@@ -102,10 +102,15 @@ dl_wifi_actions_t dl_wifi_policy_sta_down(dl_wifi_policy_t *p, uint64_t now)
             p->next_retry = now;
         }
     } else {
-        /* An attempt failed: back off 15 s -> 30 s -> 60 s. */
+        /* An attempt failed: back off 15 s -> 30 s -> 60 s; a pending change retries soon, so one transient failure
+         * (missed beacon, handshake timeout) does not use up its whole window. */
         p->connecting = false;
-        p->next_retry = now + p->retry_ms;
-        p->retry_ms = (p->retry_ms * 2u > DL_WIFI_RETRY_MAX_MS) ? DL_WIFI_RETRY_MAX_MS : p->retry_ms * 2u;
+        if (p->pending) {
+            p->next_retry = now + DL_WIFI_PENDING_RETRY_MS;
+        } else {
+            p->next_retry = now + p->retry_ms;
+            p->retry_ms = (p->retry_ms * 2u > DL_WIFI_RETRY_MAX_MS) ? DL_WIFI_RETRY_MAX_MS : p->retry_ms * 2u;
+        }
     }
     return finish(p, a, now);
 }
@@ -134,7 +139,7 @@ dl_wifi_actions_t dl_wifi_policy_set(dl_wifi_policy_t *p, dl_wifi_src_t src, uin
     dl_wifi_actions_t a = {0};
 
     p->retry_ms = DL_WIFI_RETRY_MIN_MS;
-    if ((src == DL_WIFI_SRC_LAN) && p->connected) {
+    if (src == DL_WIFI_SRC_LAN) {
         /* Pending: try the new settings, keep the old ones until they work (I6). */
         p->pending = true;
         p->pending_until = now + DL_WIFI_PENDING_MS;
