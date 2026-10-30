@@ -1,9 +1,12 @@
 /*
  * Streaming (SPEC §5.7): channel registry, WebSocket /ws (max 2 clients), per-client rings + rates, a sender task,
  * the "log" channel tapped from ESP_LOG*, and debug channels. Format and ring logic: dl_stream_core.c.
+ * Block channels: binary blocks of raw samples on the same socket, from a second per-client ring that is allocated
+ * on the first block subscription (CONFIG_DEVLINK_BLOCK_SLOTS; 0 = off, as in recovery). JSON frames are unchanged.
  */
 #include <stdarg.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "devlink_stream.h"
@@ -17,6 +20,7 @@
 #include "freertos/semphr.h"
 #include "freertos/task.h"
 #include "lwip/sockets.h"
+#include "sdkconfig.h"
 
 #define WS_MSG_MAX 1400u   /* frames per WebSocket message, newline-separated */
 #define WS_RX_MAX  512u
@@ -30,6 +34,10 @@ struct devlink_channel {
     uint16_t default_hz;
     uint16_t max_hz;
     uint8_t index;
+    /* block channels only */
+    const char *fields;                    /* the module's string: names, comma-separated */
+    uint8_t n_fields;
+    uint8_t sample;
 };
 
 typedef struct {
@@ -40,6 +48,9 @@ typedef struct {
     uint64_t next[DEVLINK_MAX_CHANNELS];
     int64_t stalled_since;                 /* 0 = socket writable last time */
     dl_ring_t ring;
+    dl_bring_t bring;                      /* binary blocks; mem NULL until the first block subscription */
+    uint32_t bseq[DEVLINK_MAX_CHANNELS];   /* next block sequence number per channel (counts dropped blocks) */
+    uint32_t bgap;                         /* bit per channel: a block was dropped since the last one queued */
 } client_t;
 
 static devlink_channel_t s_ch[DEVLINK_MAX_CHANNELS];
@@ -54,6 +65,8 @@ static vprintf_like_t s_orig_vprintf;
 static char s_frame[DL_FRAME_MAX];
 static char s_line[DL_FRAME_MAX];
 static char s_msg[WS_MSG_MAX];
+static uint8_t s_bmsg[(CONFIG_DEVLINK_BLOCK_SLOTS > 0) ? DL_BLOCK_MAX : 1u]; /* sender task only */
+static uint8_t s_bhdr[DL_BLOCK_FIXED_HDR + (4u * DEVLINK_BLOCK_MAX_FIELDS)];
 static float s_temp = -1000.0f;
 
 /* ---- Registry ---- */
@@ -95,6 +108,31 @@ devlink_channel_t *devlink_channel_register(const devlink_channel_cfg_t *cfg)
     return ch;
 }
 
+devlink_channel_t *devlink_block_register(const devlink_channel_cfg_t *cfg, const devlink_block_meta_t *meta)
+{
+    if ((CONFIG_DEVLINK_BLOCK_SLOTS == 0) || (meta == NULL) || (meta->n_fields == 0u) ||
+        (meta->n_fields > DEVLINK_BLOCK_MAX_FIELDS) || ((unsigned)meta->sample > DEVLINK_SAMPLE_F32)) {
+        return NULL;
+    }
+    const char *names = (meta->fields != NULL) ? meta->fields : "";
+    size_t n_names = (names[0] != '\0') ? 1u : 0u;
+    for (const char *p = names; *p != '\0'; p++) {
+        n_names += (*p == ',') ? 1u : 0u;
+    }
+    if ((strlen(names) > DEVLINK_BLOCK_FIELDS_MAX) || ((n_names != 0u) && (n_names != meta->n_fields))) {
+        return NULL;
+    }
+    devlink_channel_cfg_t c = *cfg;
+    c.type = DL_BLOCK;
+    devlink_channel_t *ch = devlink_channel_register(&c);
+    if (ch != NULL) {
+        ch->fields = names;
+        ch->n_fields = meta->n_fields;
+        ch->sample = (uint8_t)meta->sample;
+    }
+    return ch;
+}
+
 uint32_t devlink_channel_wanted_hz(const devlink_channel_t *ch)
 {
     uint32_t best = 0;
@@ -123,6 +161,9 @@ static void publish_locked(devlink_channel_t *ch, fill_fn fill, const void *arg)
     int64_t ts = esp_timer_get_time();
     size_t len = 0;
     bool any = false;
+    if (ch->type == DL_BLOCK) {
+        return; /* block channels only carry blocks (devlink_publish_block) */
+    }
     for (size_t c = 0; c < DEVLINK_MAX_WS_CLIENTS; c++) {
         client_t *cl = &s_cl[c];
         if (!cl->used || !((cl->sub >> ch->index) & 1u) ||
@@ -191,6 +232,40 @@ void devlink_publish_json(devlink_channel_t *ch, const char *json)
     if (listening(ch) && (xSemaphoreTake(s_lock, LOCK_WAIT) == pdTRUE)) {
         publish_locked(ch, fill_raw, json);
         xSemaphoreGive(s_lock);
+    }
+}
+
+void devlink_publish_block(devlink_channel_t *ch, int64_t t0_us, uint32_t period_ns, const float *scale,
+                           const void *samples, uint16_t n_samples, uint8_t flags)
+{
+    if ((ch == NULL) || (ch->type != DL_BLOCK) || (n_samples == 0u) || (samples == NULL) || !listening(ch) ||
+        (xSemaphoreTake(s_lock, LOCK_WAIT) != pdTRUE)) {
+        return;
+    }
+    size_t dlen = (size_t)n_samples * ch->n_fields * dl_sample_size(ch->sample);
+    uint32_t bit = 1u << ch->index;
+    bool any = false;
+    for (size_t c = 0; c < DEVLINK_MAX_WS_CLIENTS; c++) {
+        client_t *cl = &s_cl[c];
+        if (!cl->used || ((cl->sub & bit) == 0u)) {
+            continue;
+        }
+        dl_block_hdr_t h = {.sample = ch->sample, .ch_id = ch->index, .n_fields = ch->n_fields,
+                            .flags = (uint8_t)((flags & DL_BLOCK_FLAG_SRC_GAP) |
+                                               (((cl->bgap & bit) != 0u) ? DL_BLOCK_FLAG_GAP : 0u)),
+                            .seq = cl->bseq[ch->index]++, .t0_us = (uint64_t)t0_us, .period_ns = period_ns,
+                            .n_samples = n_samples};
+        size_t hlen = dl_block_header(s_bhdr, &h, scale);
+        if (dl_bring_push(&cl->bring, s_bhdr, hlen, samples, dlen)) {
+            cl->bgap &= ~bit;
+            any = true;
+        } else {
+            cl->bgap |= bit;
+        }
+    }
+    xSemaphoreGive(s_lock);
+    if (any && (s_sender != NULL)) {
+        xTaskNotifyGive(s_sender);
     }
 }
 
@@ -263,6 +338,8 @@ static void remove_client_locked(int fd)
         if (s_cl[c].used && (s_cl[c].fd == fd)) {
             s_cl[c].used = false;
             s_cl[c].sub = 0;
+            free(s_cl[c].bring.mem); /* the sender copies a block out under the lock, so nothing points here */
+            dl_bring_init(&s_cl[c].bring, NULL, 0);
         }
     }
 }
@@ -308,14 +385,18 @@ static void sender_task(void *arg)
                     break;
                 }
                 s_cl[c].stalled_since = 0;
-                size_t n = s_cl[c].used ? dl_ring_pop_batch(&s_cl[c].ring, s_msg, sizeof(s_msg)) : 0u;
-                /* s_msg is only used by this task: it can be sent after unlocking */
+                size_t n = dl_ring_pop_batch(&s_cl[c].ring, s_msg, sizeof(s_msg));
+                size_t nb = dl_bring_pop(&s_cl[c].bring, s_bmsg, sizeof(s_bmsg));
+                /* s_msg and s_bmsg are only used by this task: they can be sent after unlocking */
                 xSemaphoreGive(s_lock);
-                if (n == 0u) {
+                if ((n == 0u) && (nb == 0u)) {
                     break;
                 }
+                /* one text batch and one block per round, so neither kind starves the other */
                 httpd_ws_frame_t f = {.type = HTTPD_WS_TYPE_TEXT, .payload = (uint8_t *)s_msg, .len = n};
-                if (httpd_ws_send_data(s_server, fd, &f) != ESP_OK) {
+                httpd_ws_frame_t fb = {.type = HTTPD_WS_TYPE_BINARY, .payload = s_bmsg, .len = nb};
+                if (((n > 0u) && (httpd_ws_send_data(s_server, fd, &f) != ESP_OK)) ||
+                    ((nb > 0u) && (httpd_ws_send_data(s_server, fd, &fb) != ESP_OK))) {
                     xSemaphoreTake(s_lock, portMAX_DELAY);
                     remove_client_locked(fd);
                     xSemaphoreGive(s_lock);
@@ -346,7 +427,8 @@ static void ws_reply(httpd_req_t *req, const char *text)
 
 void dl_stream_channels_json(dl_jw_t *w)
 {
-    static const char *types[] = {"number", "array", "object"};
+    static const char *types[] = {"number", "array", "object", "block"};
+    static const char *samples[] = {"i16", "i32", "f32"};
     dl_jw_raw(w, "{\"channels\":[");
     for (size_t i = 0; i < s_nch; i++) {
         dl_jw_raw(w, (i > 0u) ? ",{" : "{");
@@ -355,6 +437,24 @@ void dl_stream_channels_json(dl_jw_t *w)
         dl_jw_kv_str(w, "type", types[s_ch[i].type]);
         dl_jw_kv_uint(w, "default_hz", s_ch[i].default_hz);
         dl_jw_kv_uint(w, "max_hz", s_ch[i].max_hz);
+        if (s_ch[i].type == DL_BLOCK) { /* the binary blocks carry this id */
+            dl_jw_kv_uint(w, "id", s_ch[i].index);
+            dl_jw_kv_uint(w, "n_fields", s_ch[i].n_fields);
+            dl_jw_kv_str(w, "sample", samples[s_ch[i].sample]);
+            dl_jw_key(w, "fields");
+            dl_jw_raw(w, "[");
+            char name[DEVLINK_BLOCK_FIELDS_MAX + 1u];
+            const char *p = s_ch[i].fields;
+            for (size_t f = 0; *p != '\0'; f++) {
+                size_t k = strcspn(p, ",");
+                memcpy(name, p, k);
+                name[k] = '\0';
+                dl_jw_raw(w, (f > 0u) ? "," : "");
+                dl_jw_str(w, name);
+                p += k + ((p[k] == ',') ? 1u : 0u);
+            }
+            dl_jw_raw(w, "]");
+        }
         dl_jw_raw(w, "}");
     }
     dl_jw_raw(w, "]");
@@ -380,6 +480,7 @@ static void handle_op(httpd_req_t *req, client_t *cl, const char *j, size_t len)
         dl_jw_raw(&w, "[");
         size_t ok = 0;
         size_t i = 0;
+        char nomem[32] = ""; /* a block channel whose ring could not be allocated */
         if (!sub && (dl_json_get_str_at(j, len, "ch", 0, name, sizeof(name)) == DL_JSON_MISSING)) {
             cl->sub = 0; /* unsub without "ch": everything */
         }
@@ -387,6 +488,14 @@ static void handle_op(httpd_req_t *req, client_t *cl, const char *j, size_t len)
             devlink_channel_t *ch = devlink_channel_find(name);
             if (ch == NULL) {
                 continue;
+            }
+            if (sub && (ch->type == DL_BLOCK) && (cl->bring.mem == NULL)) {
+                void *mem = malloc(dl_bring_mem_size(CONFIG_DEVLINK_BLOCK_SLOTS));
+                if (mem == NULL) {
+                    strcpy(nomem, ch->name); /* not subscribed: reported below */
+                    continue;
+                }
+                dl_bring_init(&cl->bring, mem, CONFIG_DEVLINK_BLOCK_SLOTS);
             }
             if (sub) {
                 cl->sub |= 1u << ch->index;
@@ -407,7 +516,14 @@ static void handle_op(httpd_req_t *req, client_t *cl, const char *j, size_t len)
                 dl_jw_str(&w, name);
             }
         }
-        dl_jw_raw(&w, "]}");
+        dl_jw_raw(&w, "]");
+        if (nomem[0] != '\0') {
+            dl_jw_key(&w, "no_memory");
+            dl_jw_raw(&w, "[");
+            dl_jw_str(&w, nomem);
+            dl_jw_raw(&w, "]");
+        }
+        dl_jw_raw(&w, "}");
     } else if (strcmp(op, "rate") == 0) {
         long hz = -1;
         devlink_channel_t *ch = NULL;
@@ -452,6 +568,9 @@ esp_err_t dl_stream_ws_post_handshake(httpd_req_t *req)
             memset(free_cl->hz, 0, sizeof(free_cl->hz));
             memset(free_cl->next, 0, sizeof(free_cl->next));
             dl_ring_init(&free_cl->ring);
+            dl_bring_init(&free_cl->bring, NULL, 0);
+            memset(free_cl->bseq, 0, sizeof(free_cl->bseq));
+            free_cl->bgap = 0;
             free_cl->stalled_since = 0;
             free_cl->sub = 0;
             free_cl->fd = fd;
@@ -462,7 +581,8 @@ esp_err_t dl_stream_ws_post_handshake(httpd_req_t *req)
             ws_reply(req, "{\"op\":\"error\",\"error\":\"too_many_clients\"}");
             return ESP_FAIL; /* closes the connection */
         }
-        ws_reply(req, "{\"op\":\"hello\",\"api\":1}");
+        ws_reply(req, (CONFIG_DEVLINK_BLOCK_SLOTS > 0) ? "{\"op\":\"hello\",\"api\":1,\"block\":1}"
+                                                     : "{\"op\":\"hello\",\"api\":1}");
         return ESP_OK;
     }
 }
@@ -508,7 +628,7 @@ uint32_t dl_stream_drops(void)
 {
     uint32_t d = s_busy_drops;
     for (size_t c = 0; c < DEVLINK_MAX_WS_CLIENTS; c++) {
-        d += s_cl[c].ring.drops;
+        d += s_cl[c].ring.drops + s_cl[c].bring.drops;
     }
     return d;
 }

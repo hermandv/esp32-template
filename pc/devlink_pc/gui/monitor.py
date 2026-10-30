@@ -1,6 +1,7 @@
 """Monitor tab (SPEC §8.3): channel list from /channels, subscribe and set rates, live plots (pyqtgraph: follows the
 last 30 s, or zoom/pan freely with the mouse, values under the cursor), readouts, log console with level/text filter
-and save, status bar with auto-reconnect after a reboot."""
+and save, status bar with auto-reconnect after a reboot. Block channels (binary, high rate) plot one curve per field
+on the board's sample clock, with the received rate and lost blocks in the channel table."""
 
 from __future__ import annotations
 
@@ -14,6 +15,7 @@ from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QComboBox, QFileDia
                                QLabel, QLineEdit, QPlainTextEdit, QPushButton, QSpinBox, QSplitter, QTableWidget,
                                QTableWidgetItem, QVBoxLayout, QWidget)
 
+from .. import blocks
 from ..api import DeviceApi
 from ..settings import data_dir
 from ..stream import MonitorSession
@@ -21,6 +23,7 @@ from . import workers
 
 WINDOW_S = 30.0
 MAX_POINTS = 20000  # per series; kept for zooming back (pyqtgraph clips and downsamples what is drawn)
+MAX_BLOCK_POINTS = 120000  # per block-channel field: 2 min at 1 kHz
 LEVELS = ["V", "D", "I", "W", "E"]
 
 
@@ -32,6 +35,13 @@ class MonitorTab(QWidget):
         self.channels: dict[str, dict] = {}
         self.points: dict[str, deque] = {}       # series name -> (t, v)
         self.series: dict[str, pg.PlotDataItem] = {}
+        self.bpoints: dict[str, deque] = {}      # block series name -> chunks of (t array, v array)
+        self.bcount: dict[str, int] = {}         # block series name -> points kept
+        self.brx: dict[str, int] = {}            # block channel -> samples received since the last rate update
+        self.brate: dict[str, float] = {}        # block channel -> received samples/s
+        self.t_brate = time.time()
+        self.board_offset: float | None = None   # PC time (s since t0) minus board time (s since boot)
+        self.board_last = 0.0
         self.log_lines: deque = deque(maxlen=20000)
         self.t0 = time.time()
 
@@ -160,6 +170,7 @@ class MonitorTab(QWidget):
         self.channels = {c["name"]: c for c in j.get("channels", [])}
         self.fill_channels()
         self.t0 = time.time()
+        self.board_offset = None
         self.session = MonitorSession(mac, ip, self.devices.mdns)
         self.session.subscribe("log")  # the log console is always on
         self.t_ui.start()
@@ -190,9 +201,13 @@ class MonitorTab(QWidget):
             chk.toggled.connect(lambda on, n=name: self.set_sub(n, on))
             self.table.setCellWidget(row, 2, chk)
             spin = QSpinBox()
-            spin.setRange(0, c.get("max_hz") or 1000)
-            spin.setValue(c.get("default_hz", 1))
-            spin.setToolTip("0 = every value")
+            if c.get("type") == "block":
+                spin.setRange(1, c.get("max_hz") or 1000)
+                spin.setToolTip("Sample rate: the board runs at the highest rate any client asks for")
+            else:
+                spin.setRange(0, c.get("max_hz") or 1000)
+                spin.setToolTip("0 = every value")
+            spin.setValue(c.get("default_hz", 1) or spin.minimum())
             spin.valueChanged.connect(lambda hz, n=name: self.session and self.session.set_rate(n, hz))
             self.table.setCellWidget(row, 3, spin)
             self.table.setItem(row, 4, QTableWidgetItem(""))
@@ -214,6 +229,8 @@ class MonitorTab(QWidget):
             for key in [k for k in self.series if k == name or k.startswith(name + "[")]:
                 self.plot.removeItem(self.series.pop(key))
                 self.points.pop(key, None)
+                self.bpoints.pop(key, None)
+                self.bcount.pop(key, None)
 
     # ---- frames ----
     def pump(self) -> None:
@@ -222,6 +239,7 @@ class MonitorTab(QWidget):
         st = self.session.state
         self.state.setText({"connected": "connected", "reconnecting": f"reconnecting… ({self.session.reconnects})",
                             "refused": "refused: the board already has 2 clients"}.get(st, st))
+        self.handle_blocks(self.session.drain_blocks(), self.session.seq.lost)
         self.handle_frames(self.session.drain())
 
     def handle_frames(self, frames: list[dict]) -> None:
@@ -244,24 +262,74 @@ class MonitorTab(QWidget):
             for key, x in vals:
                 dq = self.points.setdefault(key, deque(maxlen=MAX_POINTS))
                 dq.append((now, float(x)))
-                if key not in self.series:
-                    pen = pg.mkPen(pg.intColor(len(self.series), hues=9, values=1, maxValue=200), width=1.5)
-                    curve = self.plot.plot(name=key, pen=pen)
-                    curve.setClipToView(True)
-                    curve.setDownsampling(auto=True, method="peak")
-                    self.series[key] = curve
+                self._curve(key)
         if new_log and not self.pause.isChecked():
             for lvl, line in new_log:
                 if self._log_ok(lvl, line):
                     self.log.appendPlainText(line)
         self.redraw(now)
 
+    def _curve(self, key: str) -> None:
+        if key not in self.series:
+            pen = pg.mkPen(pg.intColor(len(self.series), hues=9, values=1, maxValue=200), width=1.5)
+            curve = self.plot.plot(name=key, pen=pen)
+            curve.setClipToView(True)
+            curve.setDownsampling(auto=True, method="peak")
+            self.series[key] = curve
+
+    def handle_blocks(self, blks: list[blocks.Block], lost: dict[int, int] | None = None) -> None:
+        """Add decoded blocks to the plot buffers (also used by tests). Board time is mapped onto the PC time axis
+        with one offset, set from the first block and again after the board rebooted (its clock went back)."""
+        by_id = {c.get("id"): (name, c) for name, c in self.channels.items() if c.get("type") == "block"}
+        for b in blks:
+            if b.ch_id not in by_id or len(b.values) == 0:
+                continue
+            name, meta = by_id[b.ch_id]
+            t = b.times_us / 1e6
+            if self.board_offset is None or t[0] < self.board_last - 1.0:
+                self.board_offset = (time.time() - self.t0) - float(t[-1])
+            self.board_last = float(t[-1])
+            t = t + self.board_offset
+            fields = blocks.field_names(meta)
+            for i, field in enumerate(fields[: b.values.shape[1]]):
+                key = f"{name}[{field}]"
+                self._curve(key)
+                dq = self.bpoints.setdefault(key, deque())
+                dq.append((t, b.values[:, i].astype(float)))
+                self.bcount[key] = self.bcount.get(key, 0) + len(t)
+                while self.bcount[key] - len(dq[0][0]) >= MAX_BLOCK_POINTS:
+                    self.bcount[key] -= len(dq.popleft()[0])
+            self.brx[name] = self.brx.get(name, 0) + len(b.values)
+        dt = time.time() - self.t_brate
+        if dt >= 1.0:
+            for name in by_id.values():
+                self.brate[name[0]] = self.brx.pop(name[0], 0) / dt
+            self.t_brate = time.time()
+            for cid, (name, _) in by_id.items():
+                row = self._row(name)
+                chk = self.table.cellWidget(row, 2) if row >= 0 else None
+                if chk is not None and chk.isChecked():
+                    self.table.item(row, 4).setText(
+                        f"{self.brate.get(name, 0):.0f} samples/s, lost {(lost or {}).get(cid, 0)} blocks")
+
+    def series_data(self, key: str) -> tuple[np.ndarray, np.ndarray]:
+        """(t, v) of a series: JSON points or block chunks."""
+        if key in self.bpoints:
+            dq = self.bpoints[key]
+            if not dq:
+                return np.empty(0), np.empty(0)
+            return np.concatenate([c[0] for c in dq]), np.concatenate([c[1] for c in dq])
+        pts = self.points.get(key)
+        if not pts:
+            return np.empty(0), np.empty(0)
+        a = np.asarray(pts, dtype=float)
+        return a[:, 0], a[:, 1]
+
     def redraw(self, now: float) -> None:
         for key, curve in self.series.items():
-            pts = self.points.get(key)
-            if pts:
-                a = np.asarray(pts, dtype=float)
-                curve.setData(a[:, 0], a[:, 1])
+            t, v = self.series_data(key)
+            if len(t):
+                curve.setData(t, v)
         if self.follow.isChecked():
             self.plot.setXRange(max(0.0, now - WINDOW_S), max(WINDOW_S, now), padding=0)
             # y follows the visible part only (auto-range over the whole buffer would include old data)
@@ -271,6 +339,7 @@ class MonitorTab(QWidget):
             # x from the data itself: curves clip to the current view, so pyqtgraph's own auto-range would not see
             # points that arrived past the right edge and the view would stop growing
             ts = [p[0] for pts in self.points.values() if pts for p in (pts[0], pts[-1])]
+            ts += [x for dq in self.bpoints.values() if dq for x in (dq[0][0][0], dq[-1][0][-1])]
             if ts:
                 self.plot.setXRange(min(ts), max(ts), padding=0.02)
             self.plot.getViewBox().setAutoVisible(y=True)
@@ -300,14 +369,13 @@ class MonitorTab(QWidget):
         t = vb.mapSceneToView(pos).x()
         parts = [f"t = {t:.2f} s"]
         for key in self.series:
-            pts = self.points.get(key)
-            if not pts:
+            ts, vs = self.series_data(key)
+            if not len(ts):
                 continue
-            ts = np.fromiter((p[0] for p in pts), float, len(pts))
             i = int(np.clip(np.searchsorted(ts, t), 0, len(ts) - 1))
             if i > 0 and abs(ts[i - 1] - t) < abs(ts[i] - t):
                 i -= 1
-            parts.append(f"{key} = {pts[i][1]:.4g}")
+            parts.append(f"{key} = {vs[i]:.4g}")
         self.hover.setText("   ".join(parts))
 
     # ---- log ----

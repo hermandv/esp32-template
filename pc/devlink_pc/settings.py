@@ -25,6 +25,7 @@ class Settings:
     manual_ips: list[str] = field(default_factory=list)
     recent_app: list[str] = field(default_factory=list)       # last few app files
     recent_recovery: list[str] = field(default_factory=list)  # last few recovery files
+    usb_build_dir: str = ""                                   # "Program blank board (USB)": the build folder
 
     @classmethod
     def load(cls, path: Path | None = None) -> Settings:

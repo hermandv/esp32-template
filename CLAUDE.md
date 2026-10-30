@@ -1,6 +1,6 @@
 # ESP32-S3 Bench Template (devlink)
 
-The design lives in `SPEC.md` (v0.11). Read it before changing anything; it is the source of truth.
+The design lives in `SPEC.md` (v0.12). Read it before changing anything; it is the source of truth.
 `SPEC_v0.2.md` is an old version kept for reference only.
 
 ## Ground rules
@@ -41,6 +41,8 @@ The design lives in `SPEC.md` (v0.11). Read it before changing anything; it is t
 | HIL Monitor + recovery update (milestone 6, via the app AP) | `powershell -File test/hil/run_via_ap.ps1 -Mac 7c:df:a1:f2:50:30 -HomeSsid 10X -Target app -Script hil_m6_net.py` |
 | Acceptance run (milestone 7; LAN, asks the 10X password; tests 2 and 3 take ~20 min and 1 h) | `pc\.venv\Scripts\python -u test/hil/acceptance.py --mac 7c:df:a1:f2:50:30 --ssid 10X --home 10X [test ...]` (test 13 needs the IDF hello_world example in `build/hello_world`; see the script) |
 | Hands-on acceptance tests 8, 12, 14 (dialogs say what to do) | `pc\.venv\Scripts\python -u test/hil/manual_m7.py --mac 7c:df:a1:f2:50:30 [test ...]` |
+| HIL block channels (milestone 8, test 27; board on the LAN) | `pc\.venv\Scripts\python -u test/hil/hil_m8_net.py --mac 7c:df:a1:f2:50:30 [test ...]` |
+| Program blank board over USB, bench test (milestone 8, tests 28/29; ERASES the board, asks the 10X password) | `pc\.venv\Scripts\python -u test/hil/manual_m8_usb.py --mac 7c:df:a1:f2:50:30 --ssid 10X --label "test esp"` |
 
 Board console over USB: `devlink info|status|restart|recovery|label <text>` and Improv Wi-Fi serial. Test builds add
 the HIL test console (`info`, `restart`, `crash`, `mode ...`, ...).

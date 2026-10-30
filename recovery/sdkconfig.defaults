@@ -8,6 +8,9 @@ CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
 # CONFIG_ESP_WIFI_NVS_ENABLED is not set
 # CONFIG_ESP_PHY_CALIBRATION_AND_DATA_STORAGE is not set
 
+# Recovery streams the log only: no block channels (SPEC §5.7).
+CONFIG_DEVLINK_BLOCK_SLOTS=0
+
 # Self-healing (SPEC §6.4): task WDT on all tasks, including both idle tasks.
 CONFIG_ESP_TASK_WDT_EN=y
 CONFIG_ESP_TASK_WDT_INIT=y

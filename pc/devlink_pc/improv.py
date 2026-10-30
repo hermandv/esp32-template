@@ -1,4 +1,5 @@
-"""Improv Wi-Fi serial client (SPEC §5.4, §8.1 USB fallback) over the board's native USB-Serial/JTAG port."""
+"""Improv Wi-Fi serial client (SPEC §5.4, §8.1 USB fallback) over the board's USB port: native USB-Serial/JTAG or a
+USB-UART bridge."""
 
 from __future__ import annotations
 
@@ -9,6 +10,8 @@ import serial
 from serial.tools import list_ports
 
 ESPRESSIF_VID = 0x303A
+# USB-serial devices an ESP32 board can sit behind: Espressif native USB, Silicon Labs CP210x, WCH CH34x, FTDI.
+USB_SERIAL_VIDS = {ESPRESSIF_VID: "Espressif", 0x10C4: "Silicon Labs", 0x1A86: "WCH", 0x0403: "FTDI"}
 STATE, ERROR, RPC, RPC_RESULT = 1, 2, 3, 4
 CMD_WIFI, CMD_STATE, CMD_INFO, CMD_SCAN = 1, 2, 3, 4
 ERRORS = {1: "invalid RPC", 2: "unknown RPC", 3: "unable to connect", 0xFF: "unknown error"}
@@ -118,23 +121,26 @@ class ImprovPort:
         raise RuntimeError("no answer from the board")
 
     def line(self, text: str, expect: str, timeout: float = 3.0) -> str | None:
-        """Send a 'devlink ...' console line and wait for a reply line containing `expect`."""
+        """Send a 'devlink ...' console line and wait for a complete reply line containing `expect` (the info line
+        is about 1 KB and arrives in pieces)."""
         self.ser.reset_input_buffer()
         self.ser.write((text + "\n").encode())
         buf, end = "", time.time() + timeout
         while time.time() < end:
-            buf += self.ser.read(256).decode(errors="replace")
-            for ln in buf.splitlines():
+            buf += self.ser.read(512).decode(errors="replace")
+            *done, buf = buf.split("\n")
+            for ln in done:
                 if expect in ln:
-                    return ln
+                    return ln.rstrip("\r")
         return None
 
 
 def find_boards(probe_timeout: float = 2.0) -> list[UsbBoard]:
-    """Espressif USB ports that answer Improv 'device info'."""
+    """USB ports (native USB or a USB-UART bridge) that answer Improv 'device info'. Runs only when the user asks:
+    it writes to every such port, and a bench may have bridges to other instruments."""
     out = []
     for p in list_ports.comports():
-        if p.vid != ESPRESSIF_VID:
+        if p.vid not in USB_SERIAL_VIDS:
             continue
         try:
             with ImprovPort(p.device) as ip:

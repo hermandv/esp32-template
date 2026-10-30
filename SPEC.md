@@ -1,4 +1,4 @@
-# ESP32-S3 Bench Template – Specification (v0.11)
+# ESP32-S3 Bench Template – Specification (v0.12)
 
 A reusable firmware + PC tool template for bringing up and testing ESP32-S3 hardware boards over Wi-Fi.
 Working name for the shared firmware layer: **devlink**.
@@ -39,6 +39,12 @@ Changes in v0.11 (milestone 7, acceptance run): after configuring through the AP
 confirms the new network instead of taking the first sighting (mDNS can still hold the old address) (§8); acceptance
 results in `test/ACCEPTANCE.md`, `README.md` added; Monitor plots use pyqtgraph (faster with many points, zoom and
 mouse-over values; CR-6 from the HorseHealth project) (§8). No firmware, bootloader or partition change.
+
+Changes in v0.12 (milestone 8): **block channels** for high sample rates: batches of raw samples sent as binary
+WebSocket messages on the same `/ws` socket, next to the unchanged JSON frames (§5.7, §5.8; CR-5); `mod_example` gets
+the block channel `example.wave`; the Monitor tab plots block channels (§8.3). **Program blank board (USB)** in the
+PC app: the first flash with esptool from pip, without ESP-IDF (§3.8, §8.1; CR-9); "Configure via USB" also finds
+boards behind CP210x / CH34x / FTDI bridges. No bootloader or partition change; recovery has block channels off.
 
 ---
 
@@ -270,6 +276,21 @@ expected offsets; a mismatch is logged and reported in `/status`.
 otadata set to `ota_0` (`otatool.py switch_ota_partition --slot 0`) → optional `dlcfg` image with Wi-Fi + label →
 read back and verify all hashes → reset and wait for the device to report on serial.
 
+Without ESP-IDF, from the PC app: Devices tab → **Program blank board (USB)** (`pc/devlink_pc/usbflash.py`, esptool
+from pip) writes the same files from existing builds (milestone 8):
+- The user picks a build folder and in it the **recovery build** (bootloader, partition table, recovery image) and
+  the **app build** (`ota_0`). Builds are told apart by the project name ("recovery" in it). Refused: an app build
+  as recovery or a recovery build as app, a bootloader without the devlink bootloader component
+  (`bootloader/project_description.json`), a partition table without `otadata` / `factory` / `ota_0`, app and
+  recovery built for different flash sizes, and image errors (the Firmware tab's checks).
+- Before erasing it checks the board: `devlink info` on the console (if it runs devlink: label and versions) and
+  `esptool flash-id` (chip, MAC, flash size). Refused: not an ESP32-S3, or a build for more flash than the board
+  has (less: a warning). The confirmation names the MAC and what the board runs.
+- Then: `write-flash --erase-all` (bootloader, partition table, otadata selecting `ota_0`, recovery, app; no reset),
+  `verify-flash` with a hard reset, wait up to 40 s for `devlink info`, `devlink label`, and Wi-Fi over Improv if
+  given (password not stored). 921,600 baud. Cancel kills esptool; a board stopped while it is written has no valid
+  image until it is programmed again (the ROM download mode is always reachable over USB).
+
 ---
 
 ## 4. Device identity
@@ -453,6 +474,33 @@ Implementation (milestone 4, `dl_stream.c`, `dl_stream_core.c`):
 - Recovery has the `log` channel only (no sysmon, §6.1). Producers can check `devlink_channel_wanted_hz()` and skip
   measuring while nobody listens.
 
+**Block channels** (milestone 8, for high sample rates, e.g. a sensor at 200–1000 Hz). A module collects raw samples
+into blocks (typically 50 ms) and devlink sends each block as **one binary WebSocket message on the same `/ws`**:
+- Coexistence: JSON frames, ops and replies are unchanged. A client gets binary messages only for block channels it
+  subscribed to, so a client that knows nothing about blocks never sees one. The hello says
+  `{"op":"hello","api":1,"block":1}` when the build has block channels.
+- `/channels` lists them with `"type":"block"` and `id` (carried in every block), `n_fields`, `fields` (a list of
+  names) and `sample` (`i16` / `i32` / `f32`).
+- `rate` on a block channel is the **sample rate**. The producer runs at the highest rate any subscriber asked for
+  (`devlink_channel_wanted_hz()`), and every subscriber gets every block (no per-client thinning).
+- Message, little-endian: `u16` magic `0xB10C` | `u8` version 1 | `u8` sample type (0 int16, 1 int32, 2 float32) |
+  `u16` channel id | `u8` n_fields | `u8` flags (bit 0 `GAP`: blocks of this channel were dropped for this client
+  before this one; bit 1 `SRC_GAP`: the producer lost samples) | `u32` sequence number (per channel and client; counts
+  dropped blocks too) | `u64` time of the first sample (µs since boot, the JSON `ts` clock) | `u32` sample period (ns) |
+  `u16` n_samples | `u16` header length (28 + 4 × n_fields) | n_fields × `f32` scale (value = raw × scale; in every
+  block, so a range change needs no extra message) | samples, interleaved. At most 1,400 bytes per message and 8 fields
+  (6 × int16: up to 105 samples per block).
+- Memory: a second ring per client, `CONFIG_DEVLINK_BLOCK_SLOTS` slots of 1.4 KB (default 16, about 0.8 s of 50 ms
+  blocks), **allocated from the heap when the client first subscribes to a block channel and freed when it
+  disconnects**, so an app without block channels pays nothing. If it can't be allocated, the `sub` reply lists the
+  channel under `no_memory` and does not subscribe it. 0 = block channels off (`devlink_block_register()` returns
+  NULL); recovery sets 0.
+- A slow client loses whole blocks (counted in `/status` `drops`, `GAP` flag, sequence gap), never memory; other
+  clients are not affected. The sender task sends one text batch and one block per round, so neither starves.
+  Blocks pause during an OTA, like everything else.
+- Measured on the bench board (milestone 8, `example.wave`, 3 × int16): 100 / 200 / 500 / 1000 Hz without a lost
+  block or sample, 1 kHz for 60 s next to JSON channels, two clients at once, heap −22 KB with one ring.
+
 ### 5.8 Module API
 
 ```c
@@ -461,6 +509,17 @@ devlink_channel_t *ch = devlink_channel_register(&(devlink_channel_cfg_t){
 devlink_publish_num(ch, value);
 ```
 Built-in channels: `sys.temp` (die temperature, low absolute accuracy), `sys.heap`, `sys.rssi`, `log`.
+
+Block channels (§5.7): register once, then publish blocks of about 50 ms at the rate subscribers want:
+```c
+devlink_channel_t *ch = devlink_block_register(
+    &(devlink_channel_cfg_t){.name = "imu.raw", .default_hz = 200, .max_hz = 1000},
+    &(devlink_block_meta_t){.fields = "ax,ay,az", .n_fields = 3, .sample = DEVLINK_SAMPLE_I16});
+uint32_t hz = devlink_channel_wanted_hz(ch);            /* 0 = nobody listens: don't sample */
+devlink_publish_block(ch, t0_us, 1000000000u / hz, scale, samples, n, 0 /* or DEVLINK_BLOCK_SRC_GAP */);
+```
+`fields` is kept by reference (a string literal). `mod_example` shows the pattern with `example.wave`
+(`sine,count,noise`; `count` goes up by one per sample, so a client can check that nothing was lost).
 
 **Rules for test modules** (documented, checked in code review – they can't all be enforced):
 - Don't use GPIO19/20 (native USB) unless the board config says so; it removes the USB serial/auto-download path.
@@ -612,6 +671,13 @@ Implementation (milestone 5, `pc/devlink_pc/`, venv `pc/.venv`, `pc/requirements
   change), then replays the subscriptions and rates.
 - Firmware tab: target "recovery" with its own file history, an extra confirmation and the self-test result; on a
   failed self-test it offers the previous recovery file.
+- Block channels (milestone 8): `devlink_pc/blocks.py` decodes binary messages (NumPy, scaled) and counts lost
+  blocks from the sequence numbers; `MonitorSession` keeps them in their own queue (`drain_blocks()`). The Monitor
+  tab plots one curve per field on the board's sample clock (mapped onto the PC time axis with one offset, set again
+  after a reboot), keeps 2 min per field, and shows the received rate and lost blocks in the channel table.
+- Program blank board (USB) (milestone 8, §3.8): `devlink_pc/usbflash.py` (Qt-free, esptool from pip in a
+  subprocess) and the dialog `gui/usbprogram.py`; the build folder is remembered (`usb_build_dir`), the password is
+  not.
 
 ### 8.1 Devices tab
 - Table keyed by **MAC**: id, label, IP, hostname, mode (app / recovery / needs-config), boot reason, app ver,
@@ -623,6 +689,9 @@ Implementation (milestone 5, `pc/devlink_pc/`, venv `pc/.venv`, `pc/requirements
   `POST /wifi` + label within a few seconds (Windows may switch away from a network without internet) → restore the
   previous network → wait for the device to appear on the LAN → confirm. Retries the POST if the join was dropped.
   Fallback: **USB** – the app lists serial ports that answer Improv "device info" and configures them the same way.
+  Ports looked at: Espressif native USB and the usual USB-UART bridges (CP210x, CH34x, FTDI); only when the user asks,
+  because it writes to every such port.
+- **Program blank board (USB)** (§3.8): first flash or full re-flash without ESP-IDF.
 - Actions: connect (Monitor), open web page, set friendly name, change Wi-Fi (safe-change rules), reboot / reboot to
   recovery / boot other slot, factory reset, download core dump.
 
@@ -634,7 +703,7 @@ Implementation (milestone 5, `pc/devlink_pc/`, venv `pc/.venv`, `pc/requirements
 
 ### 8.3 Monitor tab
 - Channel list from `/channels`, subscribe, per-channel rate; live plots, readouts, log console with filter/search;
-  save log to text. Status bar: uptime, heap, RSSI, drops, boot reason, connection state; auto-reconnect after reboot.
+  save log to text. Block channels: the rate is the sample rate; one curve per field; received rate and lost blocks. Status bar: uptime, heap, RSSI, drops, boot reason, connection state; auto-reconnect after reboot.
 
 ### 8.4 Settings
 API key, discovery options, default rates, data folder, bench Wi-Fi SSID/password used by the configure flow.
@@ -686,6 +755,14 @@ Grouped by invariant. All run on the oldest bootloader in use.
 24. Change Wi-Fi over LAN to a wrong password → device reverts within 30 s, still on the LAN.
 25. Good app OTA to a device whose saved password is wrong → no rollback; config AP; configure from PC app → on LAN.
 26. App writing to the bootloader region / burning an eFuse (test build) → aborted / virtual only.
+
+**Block channels and USB programming (milestone 8)**
+27. Block channel at 100, 200, 500 and 1000 Hz → every block and every sample arrives at the asked rate; 1 kHz for
+    60 s next to JSON channels without a loss; two clients both get every block; a JSON-only client never gets a binary
+    message; a stalled client loses only its own blocks (counted) and its ring is freed; blocks pause during an OTA.
+28. Program blank board (USB) with label and Wi-Fi → the board is on the LAN under its label; a wrong pick (app as
+    recovery, other flash size, not the devlink bootloader) is refused before anything is written.
+29. Cancel in the middle of the write → esptool stops; the board has no valid image and is programmed again.
 
 ---
 
@@ -740,6 +817,8 @@ Grouped by invariant. All run on the oldest bootloader in use.
 5. PC app: Devices (incl. configure flow) + Firmware tabs.
 6. PC app: Monitor tab; Improv USB provisioning; recovery update + self-test.
 7. Full acceptance run (§9), README.
+8. Block channels (CR-5) and Program blank board (USB) (CR-9): firmware, PC library, Monitor and Devices tab, tests
+   27–29.
 
 ---
 
@@ -758,7 +837,7 @@ Grouped by invariant. All run on the oldest bootloader in use.
 
 - **Remote commands**: modules register commands (`/commands`, `/cmd/<name>`, `cmd` op on the WebSocket).
 - **CSV recording** in the Monitor tab.
-- Multiple stored Wi-Fi networks, binary stream frames, TLS / signed images.
+- Multiple stored Wi-Fi networks, TLS / signed images. (Binary stream frames: done in v0.12, block channels.)
 
 ---
 

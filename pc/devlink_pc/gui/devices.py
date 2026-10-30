@@ -17,6 +17,7 @@ from .. import configure, discovery, improv, wifi_win
 from ..api import ApiError, DeviceApi
 from ..settings import Settings, data_dir
 from . import workers
+from .usbprogram import ProgramDialog
 
 HIGHLIGHT = {"rollback", "crash_loop", "quick_reset", "recovery_loop", "no_valid_app"}
 COLUMNS = ["MAC", "ID", "Label", "IP", "Hostname", "Mode", "Boot reason", "App", "Recovery", "RSSI", "Last seen"]
@@ -127,6 +128,9 @@ class DevicesTab(QWidget):
         self.btn_configure.clicked.connect(self.configure_ap)
         self.btn_usb = QPushButton("Configure via USB…")
         self.btn_usb.clicked.connect(self.configure_usb)
+        self.btn_flash = QPushButton("Program blank board (USB)…")
+        self.btn_flash.setToolTip("First flash over USB: erases everything, writes bootloader, recovery and app")
+        self.btn_flash.clicked.connect(self.program_usb)
         self.btn_web = QPushButton("Open web page")
         self.btn_web.clicked.connect(self.open_web)
         self.btn_name = QPushButton("Set name…")
@@ -152,7 +156,7 @@ class DevicesTab(QWidget):
             top.addWidget(w)
         top.addStretch(1)
         acts = QHBoxLayout()
-        for w in (self.btn_configure, self.btn_usb, self.btn_web, self.btn_name, self.btn_wifi, self.btn_reboot,
+        for w in (self.btn_configure, self.btn_usb, self.btn_flash, self.btn_web, self.btn_name, self.btn_wifi, self.btn_reboot,
                   self.btn_reset, self.btn_dump):
             acts.addWidget(w)
         acts.addStretch(1)
@@ -358,6 +362,9 @@ class DevicesTab(QWidget):
         dlg.say(("DONE: " if res.ok else "NOT DONE: ") + res.message)
         self.note(f"configure {res.mac or '?'}: {res.message}")
         self.refresh()
+
+    def program_usb(self) -> None:
+        ProgramDialog(self.s, self, on_done=self.refresh).exec()
 
     def configure_usb(self) -> None:
         self.note("looking for boards on USB (Improv)…")

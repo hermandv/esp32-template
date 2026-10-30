@@ -44,6 +44,9 @@ Status values:
 | 24 | Wi-Fi change over LAN to a wrong password → reverts within 30 s | pass | `hil_m5_pc.py p_safe_wifi_change` |
 | 25 | Good OTA with a wrong saved password → no rollback; AP; reconfigure | pass | acc `a25_wrong_password`: wrong password written to dlcfg, config AP opened, OTA through the AP became valid (no rollback), then configured from the PC app's AP flow and back on the LAN |
 | 26 | Bootloader write aborts; eFuse burn virtual only | pass | acc `a26_dangerous_writes`: `esp_flash_write` at 0x1000 → abort (reset reason panic), bootloader still matches the build (`esptool verify-flash`); `esp_efuse_write_field_blob` reads back 0xA5, then 0x00 after a restart |
+| 27 | Block channels: 100–1000 Hz, 1 kHz for 60 s, two clients, JSON-only client, stalled client, OTA pause | pass | `hil_m8_net.py` (milestone 8, 2026-10-30): every block and sample at each rate (sample counter without a gap), 1 kHz × 60 s next to JSON channels, both clients at 1 kHz, no binary to a JSON-only client, a stalled client lost 158 blocks while the reading one lost none, heap back after it was removed, no blocks while an OTA was received |
+| 28 | Program blank board (USB) with label and Wi-Fi; wrong picks refused | pass | `manual_m8_usb.py` pass 2: erase + write + verify + label + Improv Wi-Fi in 44 s, board back on 10X as "test esp"; wrong picks: `pc/tests/test_usbflash.py` |
+| 29 | Cancel in the middle of the write | pass | `manual_m8_usb.py` pass 1: cancelled at 78 % of the recovery write, esptool stopped, board left without a running image, then programmed again (pass 2) |
 
 ## Notes
 
@@ -59,5 +62,11 @@ Status values:
 - **Not covered:**
   - Test 19 (brownout). It needs an adjustable supply.
   - The ESP Web Tools half of test 16a. It was skipped.
+- **Milestone 8 (tests 27–29):** run on the bench board over the LAN. The first `hil_m8_net.py` run failed its
+  two-client tests with `too_many_clients`: a web UI page left open in the browser held one of the board's two
+  WebSocket slots. Closed, the tests passed. The USB-UART bridge path of "Program blank board" (CP210x etc.) was not
+  run here (the bench board has native USB only).
+- **After the milestone 8 run:** the board is on 10X as "test esp" with devlink_app 0.8.0-m8 in ota_0 and the
+  milestone 8 recovery build (block channels off, still reporting 0.6.0-m6) in factory.
 - **After the run:** dlcfg was erased, so the board is AP-only (`ESP32S3-CFG-F25030`, no label) with bootlab in ota_0
   and recovery 0.6.0-m6 in factory.
