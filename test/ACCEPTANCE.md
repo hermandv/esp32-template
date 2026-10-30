@@ -66,6 +66,11 @@ Status values:
   two-client tests with `too_many_clients`: a web UI page left open in the browser held one of the board's two
   WebSocket slots. Closed, the tests passed. The USB-UART bridge path of "Program blank board" (CP210x etc.) was not
   run here (the bench board has native USB only).
+- **Code review fixes (v0.12, 2026-10-30):** `hil_m8_net.py` all 10 tests passed on app 0.8.1-m8, including the new
+  `b_ops_edge_cases` (`list` answers, `"ch":[]`, repeated `sub`) and `b_recovery_cut_off` (a recovery upload cut off
+  after 300 KB is recorded as failed "(incomplete)"; a good update then passes its self-test). `manual_review_wifi.py`
+  passed: the factory-reset reply arrives, Improv connects (3.7 s), a wrong password over the LAN is "pending" with
+  `revert_after_s` 45 and reverts (back on 10X 53 s after the change). Test 24's expected time is now 45 s.
 - **After the milestone 8 run:** the board is on 10X as "test esp" with devlink_app 0.8.0-m8 in ota_0 and the
   milestone 8 recovery build (block channels off, still reporting 0.6.0-m6) in factory.
 - **After the run:** dlcfg was erased, so the board is AP-only (`ESP32S3-CFG-F25030`, no label) with bootlab in ota_0

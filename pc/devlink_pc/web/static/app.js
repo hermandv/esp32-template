@@ -220,7 +220,7 @@ $("usbBtn").onclick = async () => {
   $("usbMsg").hidden = false;
   $("usbMsg").innerHTML = `<span class="spinner-border spinner-border-sm me-2"></span>Looking for boards that answer Improv on USB…`;
   modal("usbModal").show();
-  const boards = await attempt("USB", () => api("/api/usb/boards"));
+  const boards = await attempt("USB", () => api("/api/usb/boards", {body: {}}));
   if (!boards) { modal("usbModal").hide(); return; }
   if (!boards.length) { $("usbMsg").textContent = "No board answers Improv on a USB port. Close anything that holds the port (serial monitor, test script)."; return; }
   $("usbMsg").hidden = true;
@@ -370,11 +370,11 @@ $("wifiBtn").onclick = async () => {
   const d = selectedDevice();
   if (!d) return;
   const r = await ask({title: `Change Wi-Fi of ${d.label || d.mac}`,
-    text: "Safe change: if the board cannot connect with the new settings within 30 s, it goes back to the old ones and stays reachable.",
+    text: "Safe change: if the board cannot connect with the new settings within 45 s, it goes back to the old ones and stays reachable.",
     fields: [{id: "ssid", label: "SSID", value: S.settings.bench_ssid || ""}, {id: "password", label: "Password", type: "password"}], ok: "Change"});
   if (r && r.values.ssid) {
     const res = await attempt("change Wi-Fi", () => api(`/api/dev/${d.mac}/wifi`, {body: r.values}));
-    if (res) toast("Wi-Fi change sent; the board switches in 1 s and reverts within 30 s if it can't connect.", "success");
+    if (res) toast("Wi-Fi change sent; the board switches in 1 s and reverts within 45 s if it can't connect.", "success");
   }
 };
 
@@ -660,7 +660,11 @@ const Mon = {
         try { f = JSON.parse(line); } catch (e) { continue; }
         if (!hello) {
           hello = true;
-          if (f.error === "too_many_clients") { s.state = "refused"; this.setState("refused: the board already has 2 clients", "red"); ws.close(); return; }
+          if (f.error === "too_many_clients") {
+            if (!s.reconnects) { s.state = "refused"; this.setState("refused: the board already has 2 clients", "red"); ws.close(); return; }
+            // reconnecting: the board may still hold the dead socket's slot until it notices; try again
+            ws.close(); return;
+          }
           s.state = "connected"; s.offset = null;
           for (const b of this.bstat.values()) b.last = null;  // a new connection starts every channel at seq 0
           this.setState(s.reconnects ? `connected (reconnected ${s.reconnects}×)` : "connected", "green");

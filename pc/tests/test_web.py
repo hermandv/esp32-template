@@ -170,3 +170,15 @@ def test_usb_program_routes(hub, client, monkeypatch):
     job = wait_job(hub, j["id"])
     assert job.state == "failed" and "cancelled" in job.log[-1]
     assert "s3cret" not in json.dumps(client.get("/api/state").get_json())
+
+
+def test_lan_mode_host_check_and_usb_probe_needs_header(hub, client, monkeypatch):
+    from devlink_pc import improv
+    monkeypatch.setattr(improv, "find_boards", lambda: [])
+    assert client.get("/api/usb/boards").status_code == 405          # no longer a GET (it writes to ports)
+    assert client.post("/api/usb/boards", json={}).status_code == 403  # needs X-Devlink
+    assert client.post("/api/usb/boards", json={}, headers=H).get_json() == []
+    hub.local_only, hub.lan_hosts = False, {"benchpc", "10.0.0.44"}
+    assert client.get("/api/state", headers={"Host": "10.0.0.44:8470"}).status_code == 200
+    assert client.get("/api/state", headers={"Host": "BenchPC:8470"}).status_code == 200
+    assert client.get("/api/state", headers={"Host": "evil.example:8470"}).status_code == 403  # DNS rebinding

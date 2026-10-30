@@ -45,6 +45,13 @@ WebSocket messages on the same `/ws` socket, next to the unchanged JSON frames (
 the block channel `example.wave`; the Monitor tab plots block channels (§8.3). **Program blank board (USB)** in the
 PC app: the first flash with esptool from pip, without ESP-IDF (§3.8, §8.1; CR-9); "Configure via USB" also finds
 boards behind CP210x / CH34x / FTDI bridges. No bootloader or partition change; recovery has block channels off.
+After a full code review (still v0.12): a recovery upload that fails once `factory` was written is recorded as a
+failed self-test (§7.3); recovery keeps a proven app over one that is still pending (§6.5); the safe Wi-Fi change
+waits 45 s and retries every 3 s (§5.4); Improv waits up to 40 s for the connection (§5.4); replies to a Wi-Fi save
+through the AP and to a factory reset leave before the link changes; the OTA idle timeout is 20 s and refused uploads
+are drained off the HTTP server task (§7.1); the reset-reason ring is written only when it changes (§5.2); the
+self-test's "config AP up" means the driver started it (§3.5); WebSocket fixes (§5.7); the PC waits 180 s for a board
+to come back and survives a lost OTA reply (§7.2). The bootloader's real thresholds are spelled out (§3.4, §6.6).
 
 ---
 
@@ -172,8 +179,15 @@ loop interrupted by power cycles is still caught.
    `CLEAN_RESTART`), and no recovery loop → boot `factory`. Triggered by 3 power cycles **or 3 presses of the
    EN/reset button**, each within ~5 s of the previous boot. Works even if the app is hostile or foreign (deep sleep
    forever, Wi-Fi off, hung, non-devlink). Planned restarts don't count, so quick OTA/`/reboot` sequences are safe.
+   - **Counted precisely (review, v0.12):** the rule looks at the boots that *ended* quickly. When the app has been
+     running for more than 5 s, the first press only ends that healthy boot, so it takes **4** quick power cycles or
+     presses in a row (3 if the app itself dies within 5 s). README says 4.
 3. **Crash-loop guard**: the last **5** records all lack `STABLE` and `CLEAN_RESTART` → boot `factory`.
    Catches crashes, watchdog resets, brownouts and hangs-then-power-cycle, whatever the reset reason.
+   - **Known side effect (review, v0.12):** a power-on reset is not a planned restart, so 5 ordinary power cycles in a
+     row, each less than 120 s after the previous boot (replugging while wiring a board), also land in recovery with
+     reason `crash_loop`. Nothing is wrong then; leave recovery as in §6.6. Changing this needs a new bootloader (the
+     reset reason would have to be kept in the boot log), so it applies only to boards flashed after such a change.
    - If there is a recovery loop (recovery is crash-looping too) → boot the last valid app slot instead (standard
      selection, but the OTA slots are tried before `factory`), boot reason `recovery_loop`. A broken recovery can't
      become a brick while a good app exists.
@@ -220,7 +234,8 @@ records, full sector, every decision branch) and the full fault-injection run in
 4. **Wi-Fi settings are not part of the decision (I6).** Missing/wrong credentials or no network → config AP opens, the
    self-test passes on the AP path, the app stays.
 5. Rollback therefore only happens when the firmware itself is broken: reset before marking valid (crash, watchdog,
-   power loss) or self-test not passed in 60 s (it then calls `esp_ota_mark_app_invalid_rollback_and_reboot`).
+   power loss) or self-test not passed in 60 s (it then restarts with `devlink_restart()` and the bootloader rolls
+   back; see the implementation note below).
 6. After rollback, the restored app reports `boot_reason=rollback` and the rejected version, so the PC app can show it.
 7. The devlink boot steps run **before** anything else in `app_main`, in this order: RTC WDT take-over, boot-log
    timers (`ALIVE_5S` at 5 s, `STABLE` at 120 s and after marking valid), config load. Test modules start only after that.
@@ -229,7 +244,8 @@ records, full sector, every decision branch) and the full fault-injection run in
 
 Implementation (milestone 3, `dl_app.c`):
 - The self-test runs in `devlink_start(DEVLINK_MODE_APP)`: every 500 ms it checks that the HTTP server task answers
-  (queued work, < 5 s old) and that the STA is connected or the config AP is on. Pass → `devlink_mark_valid()`
+  (queued work, < 5 s old) and that the STA is connected or the config AP is on (started by the Wi-Fi driver, not
+  only requested: `WIFI_EVENT_AP_START`, review v0.12). Pass → `devlink_mark_valid()`
   (valid + RTC WDT off) — on **every** boot, not only after an OTA, because the RTC WDT runs from the bootloader on
   every boot.
 - Not passed within `CONFIG_DEVLINK_SELFTEST_S` (60 s) while `PENDING_VERIFY` → `devlink_restart()`. The bootloader
@@ -337,7 +353,9 @@ Reported by `/api/v1/info` and in discovery TXT records:
 - Recovery: descriptor read from `factory`, plus its image SHA-256 and last self-test result (§7.3).
 - Bootloader: ESP-IDF bootloader descriptor (where provided by the IDF version) + devlink bootloader version.
 - Running partition, mode (`app`/`recovery`), state and version of each slot, **boot reason** (§3.4),
-  last rejected/rolled-back version, the last 16 boot-log records (decoded), reset reasons (ring of 8, in `dlcfg`).
+  last rejected/rolled-back version, the last 16 boot-log records (decoded), reset reasons (ring of 8, in `dlcfg`; a reason equal to the newest
+  entry is not added again, so a restart loop does not erase a dlcfg sector on every boot; the boot log still has
+  every boot).
 - Chip model + revision, flash size, PSRAM size, partition table check result, API version.
 
 ### 5.3 Config storage (`dlcfg`)
@@ -367,9 +385,9 @@ with an IDF whose NVS format the recovery doesn't understand.
 | Situation | Behaviour |
 |---|---|
 | No credentials | AP only, stays up until configured |
-| Credentials stored | STA connects immediately; **in parallel** (APSTA) config AP open for `cfg_window_boot` (default 20 s, 0 = off) |
+| Credentials stored | STA connects immediately; **in parallel** (APSTA) config AP open for `ap_window_s` (default 20 s, 0 = off) |
 | STA fails for 30 s (bad password, network gone) | Config AP opens and stays open until STA connects or new settings are saved; STA keeps retrying |
-| Button long-press (3 s) | Config AP open for `cfg_window_button` (default 120 s) |
+| Button long-press (3 s) | Config AP open for `button_window_s` (default 120 s) |
 | A client is connected to the AP | AP window extended until the client leaves (+10 s) |
 
 **APSTA channel rule**: the AP follows the STA's channel, and STA reconnect scans hop channels, which drops phones/PCs
@@ -378,10 +396,17 @@ retries every 15 s with back-off to 60 s.
 
 **Changing Wi-Fi settings safely (I6)**
 - Changed **over the LAN** (device currently connected): new settings are saved as *pending*; device reconnects with them.
-  If they don't connect within 30 s, it reverts to the previous settings and reports `wifi_change_failed`.
-  You cannot lose a working board by typing the wrong password. The device answers `{"mode":"pending"}` first and
-  switches 1 s later: dropping the STA link at once lost the reply (found on the bench, test 24).
-- Changed **through the config AP** (current settings already failing): saved directly.
+  If they don't connect within **45 s**, it reverts to the previous settings and reports `wifi_change_failed`.
+  You cannot lose a working board by typing the wrong password. The device answers
+  `{"mode":"pending","revert_after_s":45}` first and switches 1 s later: dropping the STA link at once lost the reply
+  (found on the bench, test 24). While pending, a failed attempt is retried after 3 s, not after the 15 s back-off,
+  so one transient failure (missed beacon, handshake timeout) plus a slow DHCP still fits (review, v0.12; it was 30 s
+  with the normal back-off). Pending or not is decided when the request arrives, not a second later.
+- Changed **through the config AP** (current settings already failing): saved directly. The reply also leaves first
+  (1 s): joining a router on another channel moves the AP and drops its client. The same holds for `/factory-reset`.
+- **Improv over USB** waits up to **40 s** for the connection (scan, a slow WPA3 or weak-signal association, DHCP, and
+  a retry). It only ends early on success; a failed first attempt is retried (it used to report "unable to connect"
+  after the first failure, review v0.12). The PC waits 50 s.
 
 **Config AP**
 - SSID `ESP32S3-CFG-<id>` (app) / `ESP32S3-REC-<id>` (recovery). WPA2, password from the shared config
@@ -460,13 +485,18 @@ Device → PC:
 Implementation (milestone 4, `dl_stream.c`, `dl_stream_core.c`):
 - One WebSocket message may carry **several frames, newline-separated** (one JSON object per line); the PC splits
   lines. Ops get a reply (`{"op":"sub","ok":[...],"unknown":[...]}`, `{"op":"rate","ch":..,"hz":..}`,
-  `{"op":"error","error":..}`); `{"op":"unsub"}` without `ch` ends all subscriptions; `{"op":"list"}` = `/channels`.
+  `{"op":"error","error":..}`); `{"op":"unsub"}` without `ch` ends all subscriptions (`"ch":[]` ends none);
+  `{"op":"list"}` = `/channels` (its own 4 KB buffer; with the 512 B op buffer it overflowed once the app template
+  had a block channel). A repeated `sub` keeps the client's rate.
   A new connection gets `{"op":"hello","api":1}`; a third one gets `too_many_clients` and is closed.
 - Rate per client and channel: `hz` 0 = every value (events, e.g. `log`); a request above `max_hz` is clamped.
   Samples up to 1/8 period early are accepted, so a producer at exactly the requested rate keeps it.
 - Each client has a fixed ring (32 frames × 256 B). The single sender task only hands a batch to the HTTP server task
   when the socket is writable: a stalled client never blocks the API (or, in recovery, the health check). Its new
-  frames are dropped and counted (`/status` `drops`); a client that cannot take data for 10 s is closed.
+  frames are dropped and counted (`/status` `drops`); a client that cannot take data for 10 s is closed. A send that
+  fails closes the session as well (it used to leave an open, silent socket).
+- Known limit: the HTTP server task does the actual sends, so a slow request (a Wi-Fi scan, 2–4 s) delays streaming for
+  that long; a block channel at a high rate can then drop blocks (counted, GAP flag).
 - Log tap: `esp_log_set_vprintf` hook, Log V1 (one vprintf call per line, pinned in the shared config); never blocks
   a logging task (lock busy → counted drop); not from ISRs. Logs written while the OTA lock is held are not streamed.
 - In IDF v6 the URI handler is not called for the WebSocket handshake: clients are registered in the post-handshake
@@ -496,7 +526,9 @@ into blocks (typically 50 ms) and devlink sends each block as **one binary WebSo
   channel under `no_memory` and does not subscribe it. 0 = block channels off (`devlink_block_register()` returns
   NULL); recovery sets 0.
 - A slow client loses whole blocks (counted in `/status` `drops`, `GAP` flag, sequence gap), never memory; other
-  clients are not affected. The sender task sends one text batch and one block per round, so neither starves.
+  clients are not affected. The sender task sends one message per round, text and blocks taking turns, so neither
+  starves and a round never exceeds the free send buffer `select()` promised. A block that can't be queued because
+  the lock is busy, or while an OTA runs, is counted too: the next block carries the sequence gap and the GAP flag.
   Blocks pause during an OTA, like everything else.
 - Measured on the bench board (milestone 8, `example.wave`, 3 × int16): 100 / 200 / 500 / 1000 Hz without a lost
   block or sample, 1 kHz for 60 s next to JSON channels, two clients at once, heap −22 KB with one ring.
@@ -576,11 +608,16 @@ not stored. Until the release script exists, recovery is built with the HIL test
 
 ### 6.5 Writing an app from recovery
 - Target slot: the slot that is **not** the last valid one (keep the good one as a fallback). If neither is valid, ota_0.
+  "Valid" means proven: marked valid, or undefined as after a first flash. A slot whose app is still new or pending
+  verification only counts when nothing better exists, so entering recovery right after an app update does not write
+  over the previous, proven app (review, v0.12).
 - After the image is complete and verified: set boot partition, `devlink_restart()`. The new app goes through
   the normal verify (§3.5).
 
 ### 6.6 Leaving recovery
-- `/reboot target=app` (only if a valid app exists), successful OTA, or a power cycle.
+- `/reboot target=app` (only if a valid app exists), successful OTA, or a power cycle. A power cycle leaves recovery
+  only once recovery has run 120 s (its record is then `STABLE`); earlier, the unconfirmed records still count for the
+  crash-loop guard (§3.4) and the board comes back to recovery.
 - If recovery was entered by crash loop or quick-reset escape, `/info` says so, and the PC app shows it.
 
 ---
@@ -599,17 +636,19 @@ not stored. Until the release script exists, recovery is built with the HIL test
    - project-name prefix check unless `force=1`.
 4. `esp_ota_begin` with **sequential erase** (`OTA_WITH_SEQUENTIAL_WRITES`): no multi-second full-slot erase that stalls
    the HTTP server or trips the task watchdog.
-5. Stream to flash in small chunks; **idle timeout 10 s** → `esp_ota_abort`, release lock, report error. The device is
-   ready for a new attempt without a reboot.
+5. Stream to flash in small chunks; **idle timeout 20 s** → `esp_ota_abort`, release lock, report error. The device is
+   ready for a new attempt without a reboot. (10 s until the v0.12 review: too short for a Wi-Fi dropout mid-upload.)
 6. `esp_ota_end` (SHA-256 check) → set boot partition → reply `200` with the new version → reboot after 500 ms.
 
 Implementation notes (milestone 2, found on the bench):
 - The upload runs in its **own task** (esp_http_server async request), not in the HTTP server task. The server task is
   single-threaded: with the upload inside it, a second upload simply waited and then succeeded (no 409, test 10), and
   in recovery a long upload starved the HTTP heartbeat, so the health task would let the RTC WDT reset the board
-  mid-update. Concurrent uploads are answered 409 by a small reject task.
+  mid-update. Concurrent uploads are answered 409 by a small reject task; since the v0.12 review so are uploads
+  refused before they start (bad key, wrong device, bad target), so a large refused body is not drained in the server
+  task either.
 - Rejections after the header **drain the rest of the body** before replying (bounded by the largest slot and the
-  10 s idle timeout): closing while the client still sends makes its TCP stack reset the connection and the error
+  20 s idle timeout): closing while the client still sends makes its TCP stack reset the connection and the error
   reply is lost. A `Content-Length` larger than the slot is answered `413` at once without draining; then only the
   status line is guaranteed to reach the client.
 - esp_http_server only dispatches a request once body bytes arrive; a client that stalls right after the headers gets
@@ -618,8 +657,12 @@ Implementation notes (milestone 2, found on the bench):
 ### 7.2 PC side
 - Re-checks the file before upload (same rules, shows project/version/date/chip).
 - Uploads by MAC (rediscovers the current IP first), sends `X-Device-Id`.
-- After reboot waits up to 120 s for the same MAC to reappear; checks: version = new, `boot_reason=normal`, slot valid.
-  If the old version is back, shows **"rolled back"** with the rejected version and reset reasons.
+- After reboot waits up to **180 s** for the same MAC to reappear (a hang: 90 s RTC WDT, rollback, a slow Wi-Fi join),
+  then up to 75 s more for "valid"; checks: running the new slot and the slot valid ("updated"; a boot reason other
+  than `normal` is shown with it). If the old version is back with reason `rollback`, shows **"rolled back"** with the
+  rejected version and reset reasons.
+- If the reply to the upload is lost after the whole image was sent (the board restarts 0.5 s after replying), the PC
+  does not report a failure: it judges by what the board runs afterwards.
 - **One device at a time per OTA "batch step"**: multi-select runs sequentially (or N parallel, configurable), stops on
   the first failure.
 
@@ -627,8 +670,11 @@ Implementation notes (milestone 2, found on the bench):
 - Only from a running app that is **valid** and whose last update succeeded; the PC app refuses if the app is pending
   or was just rolled back. Never in the same session step as an app update.
 - Written straight into `factory` (no A/B for recovery). Image verified (`esp_image_verify`) after writing.
+- If the upload fails **after writing started** (lost connection, idle timeout, missing marker, corrupt image), the old
+  recovery is gone: the board records `recovery_selftest=failed` with the version and "(incomplete)", so `/info` and the
+  PC app show that the board has no working recovery until a good one is uploaded (review, v0.12).
 - **Recovery self-test boot**: app sets `REQ_RECOVERY` + `SELFTEST` and reboots. Recovery starts, brings up Wi-Fi and HTTP,
-  writes `recovery_selftest=ok` to retained RTC and immediately reboots back to the app. If recovery crashes or hangs,
+  writes `recovery_selftest=ok` (in dlcfg, see below) and immediately reboots back to the app. If recovery crashes or hangs,
   the RTC WDT resets it and, because the flag was one-shot, the bootloader boots the app again. The app reports the result.
 - Failed self-test → PC app shows a red warning and offers to re-flash the previous recovery file (kept in its history).
 
@@ -657,7 +703,10 @@ http://127.0.0.1:8470/) and opens the page in the browser; the Qt app stays avai
   board actions as `/api/...` routes) and pushes the board list, job progress and notes to the page as Server-Sent
   Events. Page: Tabler (layout, dark/light theme) + uPlot (canvas plots, fast at high rates); assets vendored, no CDN.
 - Bound to 127.0.0.1 unless started with `--host` (the server can flash boards). State-changing requests need the
-  header `X-Devlink: 1` and a localhost Host header (no cross-site requests, no DNS rebinding).
+  header `X-Devlink: 1` and a localhost Host header (no cross-site requests, no DNS rebinding). With `--host` the Host
+  header must be one of this PC's own names or addresses (review, v0.12: LAN mode had no Host check). The USB scan
+  (`/api/usb/boards`) is a POST, because it writes to every USB-serial port. A refused WebSocket reconnect (the board
+  still holds the dead socket's slot) is retried; only a refusal on the first connect is final.
 - The Monitor page opens the board's WebSocket itself (no server hop). Browsers send no WebSocket pings, so a board
   that resets leaves the socket open: the page sends a probe op after 4 s of silence (the board answers any op, an
   unknown one with an error) and reconnects when no answer comes in 4 s, or when `/status` shows the uptime went back.
@@ -771,7 +820,7 @@ Grouped by invariant. All run on the oldest bootloader in use.
 21. Wrong-chip / merged / ELF / no-marker / too-large images → rejected with a clear error, nothing written.
 22. Wrong `X-Device-Id` → rejected.
 23. Recovery update with a broken recovery → self-test fails, app keeps running, PC app warns, re-flash old recovery works.
-24. Change Wi-Fi over LAN to a wrong password → device reverts within 30 s, still on the LAN.
+24. Change Wi-Fi over LAN to a wrong password → device reverts within 45 s, still on the LAN.
 25. Good app OTA to a device whose saved password is wrong → no rollback; config AP; configure from PC app → on LAN.
 26. App writing to the bootloader region / burning an eFuse (test build) → aborted / virtual only.
 

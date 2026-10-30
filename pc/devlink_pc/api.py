@@ -87,7 +87,7 @@ class DeviceApi:
         return self.post("/config", fields)
 
     def set_wifi(self, ssid: str, password: str) -> dict:
-        """Over the LAN: pending + revert after 30 s if it does not connect (SPEC §5.4)."""
+        """Over the LAN: pending + revert after 45 s if it does not connect (SPEC §5.4)."""
         return self.post("/wifi", {"ssid": ssid, "password": password})
 
     def scan(self) -> list[dict]:
@@ -115,5 +115,5 @@ class DeviceApi:
             progress: Callable[[int, int], None] | None = None) -> dict:
         url = f"{self.base}/ota?target={target}" + ("&force=1" if force else "")
         headers = {**self._headers(), "Content-Type": "application/octet-stream", "Content-Length": str(len(image))}
-        r = requests.post(url, data=_Upload(image, progress), headers=headers, timeout=(10, 120))
+        r = requests.post(url, data=_Upload(image, progress), headers=headers, timeout=(20, 120))  # 20 s: the board's idle timeout
         return self._check(r).json()

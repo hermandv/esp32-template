@@ -74,13 +74,14 @@ static void norm_mac(const char *in, char *out, size_t size)
 }
 
 /* Mutating requests: API key and device id (SPEC §5.6). Sends the error itself. */
-static bool authorized(httpd_req_t *req)
+/* NULL if the request may change things; otherwise the error (and its HTTP status in *status). */
+static const char *auth_error(httpd_req_t *req, const char **status)
 {
     char v[48];
     if ((httpd_req_get_hdr_value_str(req, "X-Api-Key", v, sizeof(v)) != ESP_OK) ||
         (strcmp(v, CONFIG_DEVLINK_API_KEY) != 0)) {
-        send_error(req, "401 Unauthorized", "bad_api_key");
-        return false;
+        *status = "401 Unauthorized";
+        return "bad_api_key";
     }
     char want[13];
     char got[13];
@@ -90,10 +91,20 @@ static bool authorized(httpd_req_t *req)
     }
     norm_mac(v, got, sizeof(got));
     if (strcmp(want, got) != 0) {
-        send_error(req, "409 Conflict", "wrong_device"); /* DHCP gave this IP to another board (test 22) */
-        return false;
+        *status = "409 Conflict";
+        return "wrong_device"; /* DHCP gave this IP to another board (test 22) */
     }
-    return true;
+    return NULL;
+}
+
+static bool authorized(httpd_req_t *req)
+{
+    const char *status;
+    const char *err = auth_error(req, &status);
+    if (err != NULL) {
+        send_error(req, status, err);
+    }
+    return err == NULL;
 }
 
 /* Read a small body into s_body. Sends the error itself. */
@@ -249,13 +260,18 @@ static esp_err_t h_wifi(httpd_req_t *req)
     dl_wifi_status_t st;
     dl_wifi_get_status(&st);
     dl_wifi_src_t src = dl_wifi_src_for_ip(peer_ipv4(req));
-    if (dl_wifi_set(src, ssid, pass) != ESP_OK) {
+    /* Over the LAN while connected: pending, reverts if it does not connect in time (I6). Decided here, once: the
+     * policy acts a second later (after this reply) and must not see a link that dropped meanwhile as "saved". */
+    bool pending = (src == DL_WIFI_SRC_LAN) && st.sta_connected;
+    if (dl_wifi_set(pending ? DL_WIFI_SRC_LAN : DL_WIFI_SRC_AP, ssid, pass) != ESP_OK) {
         return send_error(req, "400 Bad Request", "wifi_settings_invalid");
     }
-    /* Over the LAN while connected: pending, reverts after 30 s if it does not connect (I6). */
-    bool pending = (src == DL_WIFI_SRC_LAN) && st.sta_connected;
-    return send_json(req, "200 OK", pending ? "{\"ok\":true,\"mode\":\"pending\",\"revert_after_s\":30}"
-                                            : "{\"ok\":true,\"mode\":\"saved\"}");
+    if (!pending) {
+        return send_json(req, "200 OK", "{\"ok\":true,\"mode\":\"saved\"}");
+    }
+    snprintf(s_resp, sizeof(s_resp), "{\"ok\":true,\"mode\":\"pending\",\"revert_after_s\":%u}",
+             (unsigned)(DL_WIFI_PENDING_MS / 1000u));
+    return send_json(req, "200 OK", s_resp);
 }
 
 static esp_err_t h_scan(httpd_req_t *req)
@@ -289,8 +305,10 @@ static esp_err_t h_ota(httpd_req_t *req)
         (void)httpd_query_key_value(q, "target", target, sizeof(target));
         (void)httpd_query_key_value(q, "force", force, sizeof(force));
     }
-    if (!authorized(req)) {
-        return ESP_OK;
+    const char *status;
+    const char *err = auth_error(req, &status);
+    if (err != NULL) {
+        return dl_ota_reject(req, status, err); /* the body is drained off the server task */
     }
     /* The upload needs Content-Length; a chunked body would be read as image bytes (chunk sizes included). */
     char te[16];
@@ -301,7 +319,7 @@ static esp_err_t h_ota(httpd_req_t *req)
     }
     bool to_recovery = (strcmp(target, "recovery") == 0);
     if (!to_recovery && (strcmp(target, "app") != 0)) {
-        return send_error(req, "400 Bad Request", "bad_target");
+        return dl_ota_reject(req, "400 Bad Request", "bad_target");
     }
     return dl_ota_handle(req, to_recovery, strcmp(force, "1") == 0);
 }
@@ -501,7 +519,7 @@ esp_err_t dl_http_start(void)
     httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();
     cfg.max_uri_handlers = sizeof(uris) / sizeof(uris[0]) + 2u;
     cfg.stack_size = 8192;
-    cfg.recv_wait_timeout = 10; /* OTA idle timeout (SPEC §7.1 step 5) */
+    cfg.recv_wait_timeout = 20; /* OTA idle timeout (SPEC §7.1 step 5): rides out a short Wi-Fi dropout */
     cfg.send_wait_timeout = 10;
     cfg.lru_purge_enable = true;
     cfg.max_open_sockets = 8; /* HTTP + up to 2 WebSocket clients + an OTA (SPEC 5.7) */

@@ -102,8 +102,9 @@ static inline int dlcfg_write_sector(int selected)
     return (selected == 0) ? 1 : 0;
 }
 
-/** Push a reset reason into the ring. */
-void dlcfg_push_reset_reason(dlcfg_t *cfg, uint32_t reason);
+/** Push a reset reason into the ring, unless it equals the newest entry (a restart loop then writes flash once,
+ *  not on every boot; the boot log in dlboot still has every boot). Returns true if the ring changed. */
+bool dlcfg_push_reset_reason(dlcfg_t *cfg, uint32_t reason);
 
 #ifdef __cplusplus
 }

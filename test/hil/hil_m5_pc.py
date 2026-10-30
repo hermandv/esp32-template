@@ -139,13 +139,13 @@ def p_lan_ota(c: Ctx) -> None:
 
 
 def p_safe_wifi_change(c: Ctx) -> None:
-    """Test 24: change Wi-Fi over the LAN to a wrong password -> the board reverts within 30 s, still on the LAN."""
+    """Test 24: change Wi-Fi over the LAN to a wrong password -> the board reverts within 45 s, still on the LAN."""
     if not c.reachable:
         raise Fail("skipped: the PC cannot reach the board's network")
     api = DeviceApi(c.ip, c.mac)
     r = api.set_wifi(c.ssid, "wrong-password-123")
     check(r.get("mode") == "pending", f"accepted as pending ({r})")
-    time.sleep(40)
+    time.sleep(60)  # 1 s + the 45 s window + reconnecting with the old settings
     s = discovery.find_by_mac(c.mac, timeout=30, mdns=c.mdns, hint_ip=c.ip)
     check(s is not None, f"board back on the LAN at {s.ip if s else '-'}")
     st = DeviceApi(s.ip, c.mac).status()

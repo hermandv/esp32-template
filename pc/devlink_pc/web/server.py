@@ -15,6 +15,7 @@ import hashlib
 import itertools
 import json
 import queue
+import socket
 import threading
 import time
 import traceback
@@ -81,6 +82,7 @@ class Hub:
         self.notes: deque = deque(maxlen=300)
         self.firmware: dict[str, dict] = {}   # token -> {"data", "info", "path", "target"}
         self.local_only = True
+        self.lan_hosts: set[str] = set()  # with --host: the names and addresses this PC answers on (Host check)
         self._wake = threading.Event()
         self._stop = threading.Event()
 
@@ -107,13 +109,16 @@ class Hub:
 
     def _ap_loop(self) -> None:
         while not self._stop.is_set():
-            if self.s.scan_for_unconfigured:
-                try:
+            try:  # nothing may end this thread silently (the scan would never come back)
+                if self.s.scan_for_unconfigured:
                     self.apply_aps(wifi_win.device_aps())
-                except Exception as e:  # noqa: BLE001
-                    self.note(f"AP scan: {e}")
-            elif any(r.mode == "needs-config" for r in self.rows.values()):
-                self.apply_aps([])
+                else:
+                    with self.lock:
+                        stale = any(r.mode == "needs-config" for r in self.rows.values())
+                    if stale:
+                        self.apply_aps([])
+            except Exception as e:  # noqa: BLE001
+                self.note(f"AP scan: {e}")
             self._stop.wait(max(5, self.s.ap_scan_s))
 
     def refresh(self) -> None:
@@ -217,10 +222,11 @@ def create_app(hub: Hub) -> Flask:
 
     @app.before_request
     def guard():
-        if hub.local_only:
-            host = (request.host or "").rsplit(":", 1)[0].strip("[]")
-            if host not in ("127.0.0.1", "localhost", "::1"):
-                abort(403, description="this server only answers on localhost")
+        host = (request.host or "").rsplit(":", 1)[0].strip("[]").lower()
+        if host not in ("127.0.0.1", "localhost", "::1") and (hub.local_only or host not in hub.lan_hosts):
+            # Also with --host: only this PC's own names and addresses, so DNS rebinding can't reach the API.
+            abort(403, description="this server only answers on localhost" if hub.local_only
+                  else "unknown Host: open the page by this PC's name or IP address")
         if request.method not in ("GET", "HEAD", "OPTIONS") and request.headers.get("X-Devlink") != "1":
             abort(403, description="missing X-Devlink header")
 
@@ -257,7 +263,7 @@ def create_app(hub: Hub) -> Flask:
     @app.get("/api/state")
     def state():
         return jsonify({"version": __version__, "devices": hub.devices_json(), "notes": list(hub.notes),
-                        "jobs": [j.snapshot() for j in hub.jobs.values()], "settings": settings_json()})
+                        "jobs": [j.snapshot() for j in list(hub.jobs.values())], "settings": settings_json()})
 
     @app.get("/api/events")
     def events():
@@ -339,7 +345,7 @@ def create_app(hub: Hub) -> Flask:
 
         return jsonify(hub.run_job("configure", f"Configure {ap}", work).snapshot())  # password not kept
 
-    @app.get("/api/usb/boards")
+    @app.post("/api/usb/boards")  # POST: it writes to every USB-serial port, so it needs the X-Devlink header
     def usb_boards():
         return jsonify([dataclasses.asdict(b) for b in improv.find_boards()])
 
@@ -544,8 +550,6 @@ def create_app(hub: Hub) -> Flask:
             return _err(400, "this file cannot be uploaded: " + "; ".join(info.errors))
         if info.warnings and not force:
             return _err(400, "; ".join(info.warnings) + " (tick 'Upload anyway' to override)")
-        if any(j.state == "running" and j.kind == "ota" for j in hub.jobs.values()):
-            return _err(409, "an update is already running")
         rec = fw["target"] == "recovery"
         step = ota.update_recovery if rec else ota.update_device
         with hub.lock:
@@ -578,9 +582,24 @@ def create_app(hub: Hub) -> Flask:
             return {"results": results, "selftest_failed": bool(failed), "previous_recovery": prev}
 
         title = f"{'Recovery' if rec else 'App'} update: {info.project} {info.version}"
-        return jsonify(hub.run_job("ota", title, work).snapshot())
+        with hub.lock:  # check and start together: two quick clicks must not start two updates
+            if any(j.state == "running" and j.kind == "ota" for j in list(hub.jobs.values())):
+                return _err(409, "an update is already running")
+            return jsonify(hub.run_job("ota", title, work).snapshot())
 
     return app
+
+
+def lan_hosts() -> set[str]:
+    """This PC's host names and IP addresses (the Host header a page on the LAN uses)."""
+    names = {socket.gethostname().lower(), socket.getfqdn().lower()}
+    out = set(names)
+    for n in names:
+        try:
+            out |= {ai[4][0] for ai in socket.getaddrinfo(n, None)}
+        except OSError:
+            pass
+    return out
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -602,6 +621,8 @@ def main(argv: list[str] | None = None) -> int:
         pass
     hub = Hub(Settings.load())
     hub.local_only = a.host in ("127.0.0.1", "localhost", "::1")
+    if not hub.local_only:
+        hub.lan_hosts = lan_hosts()
     hub.start()
     print(f"devlink web UI {__version__}: {url}  (Ctrl+C to stop)")
     if not a.host.startswith("127.") and a.host != "localhost":

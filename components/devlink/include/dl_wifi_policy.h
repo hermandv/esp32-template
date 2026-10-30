@@ -15,7 +15,8 @@ extern "C" {
 #define DL_WIFI_STA_FAIL_AP_MS   30000u  /* STA failing this long -> config AP opens until it connects */
 #define DL_WIFI_RETRY_MIN_MS     15000u
 #define DL_WIFI_RETRY_MAX_MS     60000u
-#define DL_WIFI_PENDING_MS       30000u  /* safe change over the LAN: revert if not connected by then */
+#define DL_WIFI_PENDING_MS       45000u  /* safe change over the LAN: revert if not connected by then */
+#define DL_WIFI_PENDING_RETRY_MS 3000u   /* ... retrying the new settings this often (not the 15 s back-off) */
 #define DL_WIFI_CLIENT_LINGER_MS 10000u  /* AP stays this long after the last client left */
 
 typedef enum {
@@ -24,7 +25,7 @@ typedef enum {
 } dl_wifi_mode_t;
 
 typedef enum {
-    DL_WIFI_SRC_LAN = 0,         /* over the LAN while connected: pending + revert */
+    DL_WIFI_SRC_LAN = 0,         /* over the LAN while connected (decided by the caller at request time): pending */
     DL_WIFI_SRC_AP = 1,          /* through the config AP: saved directly */
     DL_WIFI_SRC_USB = 2,         /* Improv over USB: saved directly */
 } dl_wifi_src_t;

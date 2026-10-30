@@ -61,7 +61,7 @@ class PortWatch:
 
 
 class TrickleUpload(io.RawIOBase):
-    """OTA body that goes at full speed up to `stop_at` (fraction), then 64 bytes every 2 s (below the board's 10 s
+    """OTA body that goes at full speed up to `stop_at` (fraction), then 64 bytes every 2 s (below the board's 20 s
     idle timeout), so the board is mid-write for as long as the operator needs to cut the power."""
 
     def __init__(self, data: bytes, stop_at: float):

@@ -237,6 +237,11 @@ static void dlcfg_reset_ring(void)
     UT_EQ(c.reset_ring_pos, 2);
     UT_EQ(c.reset_ring[1], 10);
     UT_EQ(c.reset_ring[2], 3);
+    /* the same reason again (a restart loop): no change, so no flash write */
+    UT_CHECK(!dlcfg_push_reset_reason(&c, 10));
+    UT_EQ(c.reset_ring_pos, 2);
+    UT_CHECK(dlcfg_push_reset_reason(&c, 4));
+    UT_EQ(c.reset_ring_pos, 3);
 }
 
 int main(void)

@@ -105,6 +105,8 @@ typedef struct {
 /* OTA upload (dl_ota.c), called by the HTTP layer with auth checked. Runs the upload in its own task (async request). */
 struct httpd_req;
 esp_err_t dl_ota_handle(struct httpd_req *req, bool to_recovery, bool force);
+/** Refuse an upload: the body is drained in the OTA reject task, then @p status / @p error are sent. */
+esp_err_t dl_ota_reject(struct httpd_req *req, const char *status, const char *error);
 void dl_ota_get_progress(dl_ota_progress_t *p);
 bool dl_ota_busy(void);
 

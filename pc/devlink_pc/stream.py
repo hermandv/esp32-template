@@ -40,18 +40,23 @@ class MonitorSession:
 
     # ---- control (any thread) ----
     def subscribe(self, ch: str, hz: int | None = None) -> None:
-        self.subs[ch] = hz
+        with self._lock:
+            self.subs[ch] = hz
         self._send({"op": "sub", "ch": [ch]})
         if hz is not None:
             self._send({"op": "rate", "ch": ch, "hz": hz})
 
     def unsubscribe(self, ch: str) -> None:
-        self.subs.pop(ch, None)
+        with self._lock:
+            self.subs.pop(ch, None)
         self._send({"op": "unsub", "ch": [ch]})
 
     def set_rate(self, ch: str, hz: int) -> None:
-        if ch in self.subs:
-            self.subs[ch] = hz
+        with self._lock:
+            known = ch in self.subs
+            if known:
+                self.subs[ch] = hz
+        if known:
             self._send({"op": "rate", "ch": ch, "hz": hz})
 
     def close(self) -> None:
@@ -110,13 +115,17 @@ class MonitorSession:
             return False
         if hello.get("error") == "too_many_clients":
             ws.close()
-            self._set("refused")
+            # First connect: really full. Reconnecting: the board may still hold our dead socket's slot until it
+            # notices (send timeout), so keep trying.
+            self._set("refused" if self.reconnects == 0 else "reconnecting")
             return False
         self.hello = hello
         self.seq.reset()
         with self._lock:
             self._ws = ws
-        for ch, hz in list(self.subs.items()):  # replay subscriptions after a reconnect
+        with self._lock:
+            subs = dict(self.subs)
+        for ch, hz in subs.items():  # replay subscriptions after a reconnect
             self._send({"op": "sub", "ch": [ch]})
             if hz is not None:
                 self._send({"op": "rate", "ch": ch, "hz": hz})

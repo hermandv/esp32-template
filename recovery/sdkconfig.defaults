@@ -1,6 +1,6 @@
 # Recovery-only settings (shared ones are in tools/sdkconfig.defaults.devlink).
 CONFIG_APP_PROJECT_VER_FROM_CONFIG=y
-CONFIG_APP_PROJECT_VER="0.6.0-m6"
+CONFIG_APP_PROJECT_VER="0.8.1"
 CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
 
 # Recovery must not depend on PSRAM, NVS or app data (SPEC §6.2, I3).

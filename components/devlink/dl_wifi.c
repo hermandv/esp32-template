@@ -55,6 +55,7 @@ static char s_new_ssid[33], s_new_pass[65];
 static dl_wifi_src_t s_new_src;
 static bool s_own_disconnect;
 static bool s_ap_on;
+static volatile bool s_ap_running; /* the driver reported AP_START (and no AP_STOP since): the AP really is up */
 static bool s_started;
 static int8_t s_tx_dbm;
 static int s_errors;
@@ -82,6 +83,8 @@ static void on_event(void *arg, esp_event_base_t base, int32_t id, void *data)
         if (id == WIFI_EVENT_STA_DISCONNECTED) {
             const wifi_event_sta_disconnected_t *d = data;
             post(EV_STA_DOWN, d->reason);
+        } else if ((id == WIFI_EVENT_AP_START) || (id == WIFI_EVENT_AP_STOP)) {
+            s_ap_running = (id == WIFI_EVENT_AP_START);
         } else if ((id == WIFI_EVENT_AP_STACONNECTED) || (id == WIFI_EVENT_AP_STADISCONNECTED)) {
             wifi_sta_list_t list;
             uint32_t n = (esp_wifi_ap_get_sta_list(&list) == ESP_OK) ? (uint32_t)list.num : 0u;
@@ -307,7 +310,7 @@ void dl_wifi_get_status(dl_wifi_status_t *st)
     st->started = true;
     st->sta_connected = s_pol.connected;
     st->have_creds = s_pol.have_creds;
-    st->ap_on = s_ap_on;
+    st->ap_on = s_ap_on && s_ap_running; /* the self-test (SPEC §3.5 rule 3) relies on this: up, not just wanted */
     st->ap_clients = s_pol.ap_clients;
     st->pending = s_pol.pending;
     st->last_error = s_last_error;
@@ -327,13 +330,32 @@ void dl_wifi_get_status(dl_wifi_status_t *st)
     }
 }
 
-#define LAN_SET_DELAY_MS 1000u
+#define REPLY_DELAY_MS 1000u
 static esp_timer_handle_t s_set_timer;
+static esp_timer_handle_t s_forget_timer;
 
 static void deferred_set(void *arg)
 {
     (void)arg;
     post(EV_SET, 0);
+}
+
+static void deferred_forget(void *arg)
+{
+    (void)arg;
+    post(EV_FORGET, 0);
+}
+
+/* Run @p cb after REPLY_DELAY_MS: the HTTP reply must leave the board before the link changes (the STA drops for
+ * new settings or a factory reset; in APSTA a new STA channel moves the AP, dropping its client). */
+static void after_reply(esp_timer_handle_t *t, esp_timer_cb_t cb, const char *name)
+{
+    if (*t == NULL) {
+        const esp_timer_create_args_t a = {.callback = cb, .name = name};
+        (void)esp_timer_create(&a, t);
+    }
+    (void)esp_timer_stop(*t);
+    (void)esp_timer_start_once(*t, REPLY_DELAY_MS * 1000u);
 }
 
 esp_err_t dl_wifi_set(dl_wifi_src_t src, const char *ssid, const char *password)
@@ -353,17 +375,12 @@ esp_err_t dl_wifi_set(dl_wifi_src_t src, const char *ssid, const char *password)
     memcpy(s_new_pass, password, pl);
     s_new_src = src;
     xSemaphoreGive(s_lock);
-    if (src == DL_WIFI_SRC_LAN) {
-        /* Over the LAN the STA link is about to be dropped for the new settings: let the HTTP reply ("pending")
-         * leave the board first, otherwise the client never sees it. */
-        if (s_set_timer == NULL) {
-            const esp_timer_create_args_t a = {.callback = deferred_set, .name = "dl_wifi_set"};
-            (void)esp_timer_create(&a, &s_set_timer);
-        }
-        (void)esp_timer_stop(s_set_timer);
-        (void)esp_timer_start_once(s_set_timer, LAN_SET_DELAY_MS * 1000u);
+    /* dl_wifi_wait_connected() waits for the connection with these settings, not the one before */
+    xEventGroupClearBits(s_bits, BIT_CONNECTED | BIT_FAILED);
+    if (src == DL_WIFI_SRC_USB) {
+        post(EV_SET, 0); /* nothing to reply to over the network */
     } else {
-        post(EV_SET, 0);
+        after_reply(&s_set_timer, deferred_set, "dl_wifi_set");
     }
     return ESP_OK;
 }
@@ -373,9 +390,8 @@ bool dl_wifi_wait_connected(uint32_t timeout_ms)
     if (!s_started) {
         return false;
     }
-    xEventGroupClearBits(s_bits, BIT_FAILED);
-    EventBits_t b = xEventGroupWaitBits(s_bits, BIT_CONNECTED | BIT_FAILED, pdFALSE, pdFALSE,
-                                        pdMS_TO_TICKS(timeout_ms));
+    /* Only a connection ends the wait: a failed attempt is retried by the policy within the timeout. */
+    EventBits_t b = xEventGroupWaitBits(s_bits, BIT_CONNECTED, pdFALSE, pdFALSE, pdMS_TO_TICKS(timeout_ms));
     return (b & BIT_CONNECTED) != 0u;
 }
 
@@ -425,7 +441,7 @@ void dl_wifi_button(void)
 
 void dl_wifi_forget(void)
 {
-    post(EV_FORGET, 0);
+    after_reply(&s_forget_timer, deferred_forget, "dl_wifi_forget");
 }
 
 uint32_t dl_wifi_heartbeat_age_ms(void)

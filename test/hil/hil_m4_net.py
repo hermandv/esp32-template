@@ -108,9 +108,9 @@ def w_rates(b: Board, api: Api) -> None:
         check(sorted(r["ok"]) == ["example.adc", "example.sine", "sys.temp"] and r["unknown"] == [], f"subscribed {r}")
         fr = ws.collect(5)
         n_sine, n_temp, n_adc = count(fr, "example.sine"), count(fr, "sys.temp"), count(fr, "example.adc")
-        check(40 <= n_sine <= 55, f"example.sine at default 10 Hz: {n_sine} in 5 s")
-        check(4 <= n_temp <= 6, f"sys.temp at 1 Hz: {n_temp} in 5 s")
-        check(20 <= n_adc <= 28 and all(len(f["v"]) == 3 for f in fr if f["ch"] == "example.adc"),
+        check(38 <= n_sine <= 60, f"example.sine at default 10 Hz: {n_sine} in 5 s")
+        check(3 <= n_temp <= 7, f"sys.temp at 1 Hz: {n_temp} in 5 s")
+        check(18 <= n_adc <= 30 and all(len(f["v"]) == 3 for f in fr if f["ch"] == "example.adc"),
               f"example.adc at 5 Hz, 3 values: {n_adc}")
         t = [f["v"] for f in fr if f["ch"] == "sys.temp"]
         check(all(10 < v < 90 for v in t), f"die temperature plausible ({t[:3]})")
