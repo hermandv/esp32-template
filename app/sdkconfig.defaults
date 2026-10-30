@@ -1,4 +1,4 @@
 # App-only settings (shared ones are in tools/sdkconfig.defaults.devlink).
 CONFIG_APP_PROJECT_VER_FROM_CONFIG=y
-CONFIG_APP_PROJECT_VER="0.3.0-m3"
+CONFIG_APP_PROJECT_VER="0.8.0-m8"
 CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y

@@ -103,3 +103,57 @@ def test_monitor_unsubscribe_removes_curves(win):
     m.set_sub("example.adc", False)
     assert set(m.series) == {"sys.temp"} and len(m.plot.getPlotItem().listDataItems()) == 1
     m.session = None
+
+
+def test_monitor_block_channel(win):
+    import numpy as np
+
+    from devlink_pc import blocks
+    m = win.monitor
+    m.channels = {"example.wave": {"name": "example.wave", "type": "block", "id": 4, "n_fields": 2,
+                                   "fields": ["sine", "count"], "default_hz": 200, "max_hz": 1000}}
+    m.fill_channels()
+    spin = m.table.cellWidget(0, 3)
+    assert spin.minimum() == 1 and spin.maximum() == 1000 and spin.value() == 200
+    vals = np.array([[0.5, 0], [0.25, 1], [0.0, 2]])
+    m.handle_blocks([blocks.Block(4, 0, 0, 10_000_000, 5_000_000, vals),
+                     blocks.Block(4, 1, 0, 10_015_000, 5_000_000, vals + [0, 3]),
+                     blocks.Block(9, 0, 0, 0, 1000, vals)])          # unknown channel id: ignored
+    assert set(m.series) == {"example.wave[sine]", "example.wave[count]"}
+    t, v = m.series_data("example.wave[count]")
+    assert list(v) == [0, 1, 2, 3, 4, 5] and np.allclose(np.diff(t), 0.005)
+    m.redraw(t[-1])
+    m.session = type("S", (), {"unsubscribe": lambda self, ch: None})()
+    m.set_sub("example.wave", False)
+    assert not m.series and not m.bpoints
+    m.session = None
+
+
+def test_program_dialog(win, monkeypatch, tmp_path):
+    from PySide6.QtWidgets import QMessageBox
+
+    from devlink_pc import usbflash
+    from devlink_pc.gui import usbprogram
+    if not all((ROOT / "build" / n / "flasher_args.json").is_file() for n in ("recovery", "app")):
+        pytest.skip("build/recovery and build/app not built")
+    monkeypatch.setattr(usbflash, "usb_ports", lambda: [("COM77", "COM77: USB JTAG/serial debug unit")])
+    win.devices.s.usb_build_dir = str(ROOT / "build")
+    d = usbprogram.ProgramDialog(win.devices.s)
+    assert d.rec.currentData().kind == "recovery" and d.app.currentData().dir.name == "app"
+    assert d.fw is not None and not d.fw.errors and "8MB" in d.fw_info.text()
+    d.app.setCurrentIndex(next(i for i in range(d.app.count()) if d.app.itemData(i).kind == "recovery"))
+    assert d.fw.errors and "recovery build" in d.fw_info.text()
+    d.load_builds()
+
+    # board check -> confirmation (answered No): nothing is written
+    asked, programmed = [], []
+    monkeypatch.setattr(usbflash, "probe_board",
+                        lambda port, log: usbflash.BoardCheck(port, "ESP32-S3", "7C:DF:A1:F2:50:30", "8MB",
+                                                              {"label": "bench", "fw": {}}))
+    monkeypatch.setattr(usbflash, "program", lambda *a, **k: programmed.append(a))
+    monkeypatch.setattr(QMessageBox, "question", lambda *a, **k: asked.append(a[2]) or QMessageBox.No)
+    bc = d._probe("COM77", d.fw, print)
+    d._confirm("COM77", d.fw, bc)
+    assert asked and "7C:DF:A1:F2:50:30" in asked[0] and "runs devlink" in asked[0] and not programmed
+    assert "not programmed" in d.log.toPlainText() and not d.busy
+    d.close()

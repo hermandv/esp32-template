@@ -40,6 +40,15 @@ menu "devlink"
         help
             Must be shorter than the 90 s RTC WDT verify window (SPEC 3.5).
 
+    config DEVLINK_BLOCK_SLOTS
+        int "Block channels: ring slots per WebSocket client (0 = block channels off)"
+        default 16
+        range 0 64
+        help
+            SPEC 5.7. Each slot holds one binary block (1.4 KB). A client's ring is allocated from the heap when it
+            first subscribes to a block channel and freed when it disconnects, so an app without block channels
+            pays nothing. 16 slots = about 0.8 s of 50 ms blocks. Recovery sets 0.
+
     config DEVLINK_TEST_NO_HTTP
         bool "TEST BUILDS: never start the HTTP API (acceptance test 7)"
         default n

@@ -1,6 +1,6 @@
 """Streaming client (SPEC §5.7, §8.3), Qt-free: one WebSocket to a board, subscriptions with rates, and automatic
 reconnect after a reboot (the board is found again by MAC; its IP may change). Frames end up in a queue that the GUI
-drains on a timer."""
+drains on a timer; binary blocks of block channels are decoded into a second queue (drain_blocks)."""
 
 from __future__ import annotations
 
@@ -12,6 +12,7 @@ from collections.abc import Callable
 
 from websockets.sync.client import connect as ws_connect
 
+from . import blocks
 from .discovery import MdnsBrowser, find_by_mac, norm_mac
 
 
@@ -24,6 +25,9 @@ class MonitorSession:
         self.on_state = on_state
         self.frames: queue.Queue = queue.Queue(maxsize=50000)
         self.replies: queue.Queue = queue.Queue(maxsize=100)
+        self.blocks: queue.Queue = queue.Queue(maxsize=5000)  # decoded blocks (block channels)
+        self.seq = blocks.SeqTracker()           # blocks lost between board and PC, per channel id
+        self.hello: dict = {}                    # the board's hello ("block": 1 = it has block channels)
         self.subs: dict[str, int | None] = {}  # channel -> requested rate (None = channel default)
         self.state = "connecting"
         self.reconnects = 0
@@ -70,6 +74,15 @@ class MonitorSession:
                 break
         return out
 
+    def drain_blocks(self, max_items: int = 2000) -> list[blocks.Block]:
+        out = []
+        while len(out) < max_items:
+            try:
+                out.append(self.blocks.get_nowait())
+            except queue.Empty:
+                break
+        return out
+
     # ---- internals ----
     def _set(self, state: str) -> None:
         self.state = state
@@ -99,6 +112,8 @@ class MonitorSession:
             ws.close()
             self._set("refused")
             return False
+        self.hello = hello
+        self.seq.reset()
         with self._lock:
             self._ws = ws
         for ch, hz in list(self.subs.items()):  # replay subscriptions after a reconnect
@@ -136,6 +151,15 @@ class MonitorSession:
                 continue
             except Exception:  # noqa: BLE001  (closed: the board rebooted, Wi-Fi dropped, ...)
                 break
+            if isinstance(msg, bytes):  # binary message = one block of a block channel
+                b = blocks.decode(msg)
+                if b is not None:
+                    self.seq.feed(b)
+                    try:
+                        self.blocks.put_nowait(b)
+                    except queue.Full:
+                        self.lost_frames += 1
+                continue
             for line in msg.splitlines():
                 if not line.strip():
                     continue

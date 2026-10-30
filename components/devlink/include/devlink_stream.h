@@ -22,6 +22,7 @@ typedef enum {
     DL_NUM = 0, /* one number:          {"ch":..,"ts":..,"v":41.5} */
     DL_ARR = 1, /* array of numbers:    {"ch":..,"ts":..,"v":[1,2,3]} */
     DL_OBJ = 2, /* any JSON value:      {"ch":..,"ts":..,"v":{...}} */
+    DL_BLOCK = 3, /* binary blocks of raw samples: devlink_block_register / devlink_publish_block */
 } devlink_type_t;
 
 typedef struct {
@@ -60,6 +61,51 @@ void devlink_publish_num(devlink_channel_t *ch, double value);
 void devlink_publish_arr(devlink_channel_t *ch, const double *values, size_t n);
 /** @p json must be a valid JSON value. */
 void devlink_publish_json(devlink_channel_t *ch, const char *json);
+
+/* ---- Block channels (SPEC §5.7): high-rate raw samples, sent as binary WebSocket messages on /ws ----
+ * Register once with devlink_block_register(); collect samples into blocks of about 50 ms and publish each block
+ * with devlink_publish_block(). devlink_channel_wanted_hz() is the sample rate to run at: the highest rate any
+ * subscriber asked for (every subscriber gets every block). Off (register returns NULL) when
+ * CONFIG_DEVLINK_BLOCK_SLOTS is 0, as in recovery. The binary layout is in dl_stream_core.h (DL_BLOCK_*). */
+
+#define DEVLINK_BLOCK_MAX_FIELDS 8
+#define DEVLINK_BLOCK_FIELDS_MAX 63 /* length of the field-name string */
+#define DEVLINK_BLOCK_MAX_BYTES  1300 /* sample bytes per block: n_samples * n_fields * sample size */
+
+typedef enum { DEVLINK_SAMPLE_I16 = 0, DEVLINK_SAMPLE_I32 = 1, DEVLINK_SAMPLE_F32 = 2 } devlink_sample_t;
+
+typedef struct {
+    const char *fields;      /* field names, comma-separated: "ax,ay,az" (<= 63 chars; NULL = unnamed). Kept by
+                                reference: must stay valid (a string literal) */
+    uint8_t n_fields;        /* 1..DEVLINK_BLOCK_MAX_FIELDS; must match the names */
+    devlink_sample_t sample;
+} devlink_block_meta_t;
+
+/**
+ * @brief Register a block channel (cfg->type is ignored). NULL if the table is full, the meta is invalid or block
+ *        channels are off in this build.
+ *
+ * @requirement SPEC-5.7-BLOCK
+ * @parent      -
+ * @test        host:stream_block_*, T27
+ */
+devlink_channel_t *devlink_block_register(const devlink_channel_cfg_t *cfg, const devlink_block_meta_t *meta);
+
+/**
+ * @brief Queue one block for every subscriber: @p n_samples x n_fields samples, interleaved, little-endian, with the
+ *        time of the first sample (µs since boot, as esp_timer_get_time), the sample period, and one scale per field
+ *        (value = raw * scale; NULL = 1.0). @p flags: 0, or DEVLINK_BLOCK_SRC_GAP when the producer lost samples
+ *        before this block. Cheap when nobody listens; paused during an OTA. A subscriber whose ring is full loses
+ *        the block (counted; its next block carries the GAP flag and the sequence number shows the gap).
+ *
+ * @requirement SPEC-5.7-BLOCK
+ * @parent      -
+ * @test        T27
+ */
+void devlink_publish_block(devlink_channel_t *ch, int64_t t0_us, uint32_t period_ns, const float *scale,
+                           const void *samples, uint16_t n_samples, uint8_t flags);
+
+#define DEVLINK_BLOCK_SRC_GAP 0x02u
 
 /** Highest rate any client wants for @p ch (Hz); 0 = nobody subscribed. Producers can skip sampling when 0.
  *  An event-type subscription (rate 0) reports the channel's max_hz (or 1000 if unlimited). */

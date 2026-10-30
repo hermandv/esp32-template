@@ -16,10 +16,11 @@ The design is in [SPEC.md](SPEC.md). The acceptance results are in [test/ACCEPTA
   - Wi-Fi and provisioning: config AP, Improv serial, safe Wi-Fi change with automatic revert;
   - finding boards: mDNS and UDP discovery;
   - the HTTP API `/api/v1` with OTA, a self-test, and rollback when a new app is broken;
-  - WebSocket streaming of channels and the log;
+  - WebSocket streaming of channels and the log, plus binary block channels for high sample rates (up to 1 kHz
+    tested);
   - the BOOT button.
 - **Test app template** (`app/`) with `devlink_sysmon` (`sys.temp`, `sys.heap`, `sys.rssi`) and `mod_example`, a
-  module to copy for each IC under test.
+  module to copy for each IC under test (it also has the block channel `example.wave`).
 - **PC app** (`pc/`, PySide6), with three tabs:
   - **Devices**: find and configure boards, including over USB.
   - **Firmware**: update one board or many, and update the recovery image.
@@ -69,6 +70,11 @@ python tools/flash_all.py --app app --label "my board"
 It then checks the board's report over USB. **The bootloader and the partition table can only be changed over USB**
 (SPEC §3.6), so plan any change to them.
 
+On a PC without ESP-IDF, use **Program blank board (USB)…** in the PC app's Devices tab instead. It writes the same
+files from existing builds with esptool (installed with the PC app): pick the build folder, the recovery build and the
+app build. It checks the board first (chip, MAC, flash size, and what it runs), asks before erasing, and can set the
+label and Wi-Fi at the end. Copy the two build folders to that PC, or point it at this repo's `build/`.
+
 ## Getting a board onto the network
 
 A board without Wi-Fi settings opens the access point `ESP32S3-CFG-<id>` (password `configure`). Here `<id>` is the
@@ -102,13 +108,15 @@ The older Qt desktop app has the same three tabs. Start it with `devlink-qt.bat`
 - **Devices**:
   - lists boards found through mDNS and UDP broadcast, and the config APs in range;
   - shows the label, mode (app or recovery), versions, the boot reason, and the last rollback or rejected image;
-  - actions: reboot, reboot to recovery, factory reset, and fetching a core dump.
+  - actions: reboot, reboot to recovery, factory reset, and fetching a core dump;
+  - **Program blank board (USB)…**: the first flash without ESP-IDF (see above).
 - **Firmware**:
   - picks an `.bin` file and checks it the same way the board does;
   - updates the selected boards one by one and reports `updated`, `rolled back` or `rejected` for each.
   - The **Recovery** target updates the factory image. The board then boots it once as a self-test.
 - **Monitor**:
   - subscribes to channels, sets their rates, plots the last 30 s and shows the log;
+  - block channels: one curve per field, with the received rate and lost blocks;
   - reconnects by itself after a reboot.
 
 ## Writing a test app
@@ -121,7 +129,10 @@ The older Qt desktop app has the same three tabs. Start it with `devlink-qt.bat`
 2. Copy `components/mod_example` to `components/mod_<ic>`. A module:
    - registers its channels once (`devlink_channel_register`);
    - measures only while `devlink_channel_wanted_hz()` is above zero;
-   - publishes with `devlink_publish_num` or `devlink_publish_arr`.
+   - publishes with `devlink_publish_num` or `devlink_publish_arr`;
+   - for high rates (hundreds of samples per second and more): registers a block channel
+     (`devlink_block_register`) and publishes blocks of about 50 ms with `devlink_publish_block` (SPEC §5.7, §5.8;
+     `example.wave` in `mod_example` shows how).
 3. Module rules (SPEC §5.8). They are checked in review, not in code:
    - leave GPIO19 and GPIO20 (USB) and the button and LED pins alone;
    - don't use deep sleep without a timer wake-up (use `devlink_sleep()`);
@@ -159,7 +170,7 @@ The last resort is a USB re-flash with `flash_all.py`.
 | `tools/` | `flash_all.py`, partition tables, shared sdkconfig defaults, host test runner, `devlink_tools.py` |
 | `test/host` | Host unit tests (gcc), for code shared with the bootloader and devlink |
 | `test/fw` | Test firmware: `bootlab` (fault-injection app), the test console, recovery variants |
-| `test/hil` | Hardware-in-the-loop test scripts for milestones 1–7, plus the acceptance run |
+| `test/hil` | Hardware-in-the-loop test scripts for milestones 1–8, plus the acceptance run |
 
 ## Tests
 
@@ -168,7 +179,9 @@ The command table is in [CLAUDE.md](CLAUDE.md). In short:
 - `py -3.12 tools/host_tests.py`: host unit tests for the boot log, dlcfg, JSON, OTA checks, Improv, streaming,
   button and Wi-Fi policy.
 - `pc\.venv\Scripts\python -m pytest pc/tests`: PC library and GUI tests.
-- `test/hil/hil_m1.py` … `hil_m6_net.py`: the milestone suites, run on a real board.
+- `test/hil/hil_m1.py` … `hil_m6_net.py`, `hil_m8_net.py`: the milestone suites, run on a real board.
+- `test/hil/manual_m8_usb.py`: Program blank board (USB) on the bench board, including a cancel in the middle (erases
+  the board).
 - `test/hil/acceptance.py`: the SPEC §9 tests that the milestone suites don't already cover.
 - `test/hil/manual_m7.py`: the hands-on tests (power cuts during an OTA, reset presses, BOOT button). Dialogs say
   what to do.
