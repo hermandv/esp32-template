@@ -419,13 +419,14 @@ def create_app(hub: Hub) -> Flask:
         hub.s.save()
 
         def work(job: Job):
-            info = usbflash.program(port, fw, job.say, label=label, cancel=job.cancel)
-            if ssid:
-                info["url"] = usbflash.set_wifi(port, ssid, pw, job.say)
+            info = usbflash.program_and_join(port, fw, job.say, label=label, ssid=ssid, password=pw,
+                                             cancel=job.cancel)
             job.say(f"DONE: {info.get('label') or info.get('id')} ({info.get('mac')})"
                     + (f" at {info['url']}" if info.get("url") else "; set Wi-Fi with Configure via USB"))
-            hub.note(f"programmed {info.get('mac')} on {port}: {fw.summary}")
-            return {"ok": True, "mac": info.get("mac"), "label": info.get("label"), "url": info.get("url")}
+            hub.note(f"programmed {info.get('mac')} on {port}: {fw.summary}"
+                     + (f"; Wi-Fi not set: {info['wifi_error']}" if info.get("wifi_error") else ""))
+            return {"ok": True, "mac": info.get("mac"), "label": info.get("label"), "url": info.get("url"),
+                    "wifi_error": info.get("wifi_error")}
 
         return jsonify(hub.run_job("program", f"Program the board on {port}", work).snapshot())  # password not kept
 

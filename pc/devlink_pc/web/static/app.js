@@ -333,7 +333,8 @@ const Prog = {
     } else {
       this.setStage("check");
       const r = job.result;
-      if (r && r.ok) toast(`Programmed ${r.label || r.mac}${r.url ? " · " + r.url : ""}`, "success");
+      if (r && r.ok && r.wifi_error) toast(`Programmed ${r.label || r.mac}, but Wi-Fi was not set (${r.wifi_error}). Check the password and use Configure via USB.`, "warning");
+      else if (r && r.ok) toast(`Programmed ${r.label || r.mac}${r.url ? " · " + r.url : ""}`, "success");
       else toast(`Program: ${job.state === "failed" ? (job.log[job.log.length - 1] || "failed") : "stopped"}`, "warning");
     }
   },
