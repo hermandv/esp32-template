@@ -156,3 +156,16 @@ def test_esptool_failure_is_readable(monkeypatch):
     monkeypatch.setattr(usbflash, "esptool_cmd", lambda: [sys.executable, "-c", "import sys; sys.exit(2)"])
     with pytest.raises(RuntimeError, match="esptool failed"):
         usbflash._esptool(["flash-id"], print)
+
+
+def test_wifi_failure_keeps_a_good_flash(monkeypatch):
+    monkeypatch.setattr(usbflash, "program", lambda *a, **k: {"mac": "7C:DF:A1:F2:50:30", "label": "b"})
+
+    def bad_wifi(*a):
+        raise RuntimeError("board: unable to connect")
+
+    monkeypatch.setattr(usbflash, "set_wifi", bad_wifi)
+    info = usbflash.program_and_join("COM9", None, print, label="b", ssid="10X", password="x")
+    assert info["mac"] and info["wifi_error"] == "board: unable to connect" and "url" not in info
+    monkeypatch.setattr(usbflash, "set_wifi", lambda *a: "http://10.0.0.5/")
+    assert usbflash.program_and_join("COM9", None, print, ssid="10X")["url"] == "http://10.0.0.5/"

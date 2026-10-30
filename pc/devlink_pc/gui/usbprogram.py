@@ -171,10 +171,7 @@ class ProgramDialog(QDialog):
         self._busy(True)
 
         def work(emit):
-            info = usbflash.program(port, fw, emit, label=label, cancel=self.cancel)
-            if ssid:
-                info["url"] = usbflash.set_wifi(port, ssid, pw, emit)
-            return info
+            return usbflash.program_and_join(port, fw, emit, label=label, ssid=ssid, password=pw, cancel=self.cancel)
 
         workers.run(work, on_done=self._finished, on_error=self._failed, on_progress=self.say)
 
@@ -209,6 +206,9 @@ class ProgramDialog(QDialog):
         self.pw.clear()
         self.say(f"DONE: {info.get('label') or info.get('id')} ({info.get('mac')})"
                  + (f" at {info['url']}" if info.get("url") else "; set Wi-Fi with 'Configure via USB…'"))
+        if info.get("wifi_error"):
+            QMessageBox.warning(self, "Program board", f"Programmed, but Wi-Fi was not set: {info['wifi_error']}\n\n"
+                                "Check the password and set Wi-Fi with 'Configure via USB…'.")
         self._busy(False)
         if self.on_done:
             self.on_done()

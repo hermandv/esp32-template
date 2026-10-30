@@ -332,3 +332,17 @@ def set_wifi(port: str, ssid: str, password: str, log: Callable[[str], None]) ->
         url = ip.provision(ssid, password)
     log(f"on the network: {url}")
     return url
+
+
+def program_and_join(port: str, fw: Firmware, log: Callable[[str], None], label: str = "", ssid: str = "",
+                     password: str = "", cancel: threading.Event | None = None) -> dict:
+    """program(), then Wi-Fi over Improv if @p ssid is given. A failed Wi-Fi step does not undo a good flash: it is
+    reported in info["wifi_error"] (set Wi-Fi again with Configure via USB)."""
+    info = program(port, fw, log, label=label, cancel=cancel)
+    if ssid:
+        try:
+            info["url"] = set_wifi(port, ssid, password, log)
+        except (RuntimeError, ValueError, OSError) as e:
+            info["wifi_error"] = str(e)
+            log(f"programmed, but Wi-Fi '{ssid}' was not set: {e} (wrong password? Use Configure via USB)")
+    return info
